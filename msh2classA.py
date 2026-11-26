@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# msh2classA 0.1.0-alpha   (the version is also in VERSION below and printed at start)
+# msh2classA 0.1.1-alpha   (the version is also in VERSION below and printed at start)
 # Copyright (C) 2026 Marcin Bartoszewski, trading as 3dPARTdesign - https://3dPARTdesign.com
 #
 # This program is free software: you can redistribute it and/or modify it
@@ -8,17 +8,17 @@
 # "msh2classA" and "3dPARTdesign", and the author attribution).
 # It is distributed WITHOUT ANY WARRANTY. See LICENSE and NOTICE.
 """
-msh2classA - class-A single-span patches on a scan, patch after patch,
+msh2classA - class-A single-span patches on a mesh, patch after patch,
 without leaving the command.
-The scan (mesh or block) is loaded once and cached for the Rhino session.
+The mesh (plain or block) is loaded once and cached for the Rhino session.
 The "Help" option prints the full description; the Legend button shows a short one.
 
 File layout
   math core (no Rhino):  vectors, B-spline basis, least squares, curve fit,
                          Bezier split, patch fit with G0/G1/G2 + mirror,
-                         three-step fit (scan -> match -> scan), smoothing
+                         three-step fit (mesh -> match -> mesh), smoothing
                          of a patch with its neighbours
-  Rhino part:            scan loading, pick candidates (edges/curves),
+  Rhino part:            mesh loading, pick candidates (edges/curves),
                          sides, and the Session = SettingsMixin + ScanMixin
                          + PolygonMixin + DrawMixin + BuildMixin + SmoothMixin
 
@@ -29,7 +29,7 @@ in mm and converted; lengths in messages get the decimals the unit needs.
 
 from __future__ import print_function, division
 
-VERSION = "msh2classA 0.1.0-alpha"
+VERSION = "msh2classA 0.1.1-alpha"
 import json
 import math
 import os
@@ -551,7 +551,7 @@ def _crv_frames(d, C, n=41):
 
 def profile_turn(pts, nseg=10):
     """Total tangent turning in degrees, of a smoothed (3-span cubic) copy of
-    the profile, so scan noise does not add up."""
+    the profile, so mesh noise does not add up."""
     d = BDir(3, 3); C = fit_curve(pts, chord_params(pts), d)
     T, _ = _crv_frames(d, C)
     return sum(_angle(T[i], T[i + 1]) for i in range(len(T) - 1))
@@ -564,7 +564,7 @@ def _inflections(K, ref):
     return sum(1 for i in range(len(sg) - 1) if sg[i] != sg[i + 1])
 
 def scan_noise(pts):
-    """Scatter of the scan along the profile: what a flexible (6-span) curve
+    """Scatter of the mesh along the profile: what a flexible (6-span) curve
     still cannot follow.  Used only as a floor so noise never turns it red."""
     if len(pts) < 16: return 0.0
     return curve_fit_deviation(pts, 3, 6)[0]
@@ -601,7 +601,7 @@ def span_score(pts, degree, tol_pct, noise=None):
     return s, why
 
 def single_span_reach(pts, degree, tol_pct):
-    """Profile pts (along a side, on the scan) -> (score, reason, fraction of
+    """Profile pts (along a side, on the mesh) -> (score, reason, fraction of
     the profile ONE single-span curve still handles)."""
     noise = scan_noise(pts)
     s, why = span_score(pts, degree, tol_pct, noise)
@@ -619,7 +619,7 @@ def single_span_reach(pts, degree, tol_pct):
     return s, why, lo
 
 def patch_score(grid, deg_u, deg_v, tol_pct):
-    """grid[i][j]: scan points over the whole future patch (i along u).
+    """grid[i][j]: mesh points over the whole future patch (i along u).
     -> (score, reason) for ONE deg_u x deg_v span: surface deviation relative
     to the patch size, and turning of every iso line in both directions."""
     nu = len(grid); nv = len(grid[0])
@@ -655,7 +655,7 @@ def auto_spans(lines, degree, tol, max_spans=10, log=None):
     turn = max(profile_turn(pts) for pts in lines)
     n0 = max(1, int(math.ceil(turn / SPAN_TURN.get(degree, 130.0) - 1e-9)))
     if n0 > 1 and log:
-        log("    scan turns {:.0f} deg -> at least {} patch(es)".format(turn, n0))
+        log("    mesh turns {:.0f} deg -> at least {} patch(es)".format(turn, n0))
     for n in range(min(n0, max_spans), max_spans + 1):
         worst = 0.0; worst_max = 0.0
         for pts in lines:
@@ -862,10 +862,10 @@ def _clone(prob, P0=None, conts=None, mirrors=None, soft=None, w_reg=None, extra
 
 def run_fit(prob, data_fn, iters=8, log=None, smooth_tol=0.0):
     """Patch fit in three steps (like fit -> MatchSrf -> refit):
-      A  fit the whole patch to the scan as if there were no neighbours
+      A  fit the whole patch to the mesh as if there were no neighbours
       B  match: satisfy G1/G2 (and mirror) moving the CVs as LITTLE as
-         possible away from A  (no scan here -> no wild CVs)
-      C  refit the rows that do not belong to any continuity to the scan,
+         possible away from A  (no mesh here -> no wild CVs)
+      C  refit the rows that do not belong to any continuity to the mesh,
          continuity rows locked (continuity stays exact)."""
     if not prob.conts and not prob.mirrors:
         return fit_smooth(prob, data_fn, iters, log, smooth_tol)
@@ -1016,7 +1016,7 @@ def run_fit_joint(prob, data_fn, iters=8, log=None):
             if c.ia is not None:
                 an = scal[c.ia]
                 if an < 0.05 * c.a_init:
-                    if log: log("    [WARN] side {}: tangent flipped by scan -> fixed magnitude".format(c.side + 1))
+                    if log: log("    [WARN] side {}: tangent flipped by mesh -> fixed magnitude".format(c.side + 1))
                     c.a_fixed = True; an = c.a_init
                 a_change = max(a_change, abs(an - c.a) / max(c.a, 1e-12))
                 c.a = an
@@ -1566,9 +1566,9 @@ def adjust_step(A, others, target_fn, tol=1e-3, extra_freeze=None, data_fn=None,
     target_fn(A, fixed) -> wanted CVs of A (fixed: CVs of A that may not move).
     mirror = (axis, plane value, tol): sides on the symmetry plane stay on it
     (their CVs may slide inside the plane) and keep G1/G2 across it.
-    data_fn(p) -> [(u, v, scan point)]: PULL mode - every moved patch is fitted
-    to its scan in ONE joint solve (neighbours follow A to keep the seams, and
-    stay on their scan with what they may move); CV anchors are then weak.
+    data_fn(p) -> [(u, v, mesh point)]: PULL mode - every moved patch is fitted
+    to its mesh in ONE joint solve (neighbours follow A to keep the seams, and
+    stay on their mesh with what they may move); CV anchors are then weak.
     Moves: the CVs of A that are free; of each direct neighbour only the rows
     taken by its continuity with A. Every seam among moved patches keeps its
     level; rows touching a seam with a patch that does not move are frozen.
@@ -1702,7 +1702,7 @@ def fair_target(strength=0.5):
 
 
 def scan_target(data, strength=0.5):
-    """Pull2Msh: fit A to scan samples data = [(u, v, point)], fairing as in
+    """Pull2Msh: fit A to mesh samples data = [(u, v, point)], fairing as in
     the build, then go `strength` of the way (one click = one step)."""
     def fn(A, fixed):
         if not data:
@@ -1723,7 +1723,7 @@ def _row_targets(p, lo, hi, gaps, dev=None, step=0.5):
     Rows 0..lo-1 and p-hi+1..p stay; the free rows between move `step` of the
     way towards:
       dev given : equal shares of 1 + 4*dev/max(dev) (rows gather where the
-                  scan is far)  -> Even/ToDev
+                  mesh is far)  -> Even/ToDev
       dev None  : equal 3D spacing                 -> Even
     Gaps stay 0.5..1.6 of the mean gap IN SPACE (no bunching, no bare edge).
     gaps: 3D distances between the rows now. -> list or None (nothing to do)."""
@@ -2380,7 +2380,7 @@ def match_step(A, others, want, tol, extra_freeze=None, mirror=None, mirror_side
     """Match: patch A is the MASTER (after hand edits). Its direct neighbours
     are brought back to it at the chosen levels want = {seam key: 0/1/2},
     moving only their continuity rows to A (G0 1, G1 2, G2 3 rows); seams
-    between those neighbours keep their level. No scan.
+    between those neighbours keep their level. No mesh.
     A itself moves only where it has to stay a mirror patch, and on the sides
     in mirror_sides = {side: 0/1/2}: those are brought ONTO the mirror plane
     (G0 edge on it, G1 2nd row straight across, G2 3rd row at twice the
@@ -2772,7 +2772,7 @@ def free_sides_of(A, others, tol, mirror=None, hold_neighbours=True):
 
 def refit_free_edge(A, k, pts, held=(0, 0)):
     """FreeEdgeEdt: new boundary row of free side k from a drawn curve pts
-    (on the scan, corner to corner). Only the CVs of that row between the
+    (on the mesh, corner to corner). Only the CVs of that row between the
     corners move - and not those held by the adjacent sides' neighbours /
     mirror. The rest of the patch stays as it is.  -> new CVs."""
     r0 = side_row_indices(A.du, A.dv, k, 0)
@@ -2800,7 +2800,7 @@ def refit_free_edge(A, k, pts, held=(0, 0)):
 
 def move_free_edge(A, k, pts, mirror=None):
     """FreeEdgeEdt along a drawn line: the WHOLE boundary row of side k
-    (corners too) is fitted to pts (corner to corner, on the scan); the
+    (corners too) is fitted to pts (corner to corner, on the mesh); the
     rows behind it follow, less and less towards the middle of the patch
     (no fold at the edge). A corner on the mirror plane stays on it.
     Neighbours are brought back afterwards (match_step). -> new CVs."""
@@ -2973,7 +2973,7 @@ SCAN_ROOT = "Reference Meshes- Msh2classA"   # parent layer of all scan layers
 
 
 def in_scan_root(fp, below=False):
-    """Layer full path fp is the scan root (or below it)."""
+    """Layer full path fp is the mesh root (or below it)."""
     return (fp == SCAN_ROOT and not below) or fp.startswith(SCAN_ROOT + "::")
 SCAN_KEY = "msh2classA_scan"          # user text on scan instances (source file)
 
@@ -2994,7 +2994,7 @@ def _hsv(h, s, v):
 
 
 def scan_instances():
-    """[(InstanceObject, layer full path)] of the scan blocks (under 'Reference Meshes- Msh2classA')."""
+    """[(InstanceObject, layer full path)] of the mesh blocks (under 'Reference Meshes- Msh2classA')."""
     s = ro.ObjectEnumeratorSettings()
     s.HiddenObjects = True; s.LockedObjects = True; s.ObjectTypeFilter = ro.ObjectType.InstanceReference
     out = []
@@ -3017,9 +3017,9 @@ def _idef_has_mesh(idef):
 
 
 def scan_objects():
-    """[(block, layer full path)] the scan tools work on: the scan blocks
-    (LoadScans, layer 'Reference Meshes- Msh2classA') and any other BLOCK with a mesh inside.
-    Plain meshes are not used (keep scans as blocks - the file stays small)."""
+    """[(block, layer full path)] the mesh tools work on: the mesh blocks
+    (LoadMeshes, layer 'Reference Meshes- Msh2classA') and any other BLOCK with a mesh inside.
+    Plain meshes are not used (keep meshes as blocks - the file stays small)."""
     s = ro.ObjectEnumeratorSettings()
     s.HiddenObjects = True; s.LockedObjects = True
     out = []; seen = set()
@@ -3157,7 +3157,7 @@ def api_insert(path, name, layer_index):
     dname = name; k = 2
     while sc.doc.InstanceDefinitions.Find(dname) is not None:
         dname = "{} ({})".format(name, k); k += 1
-    idx = sc.doc.InstanceDefinitions.Add(dname, "scan: " + path, rg.Point3d.Origin, geos, ats)
+    idx = sc.doc.InstanceDefinitions.Add(dname, "mesh: " + path, rg.Point3d.Origin, geos, ats)
     if idx < 0:
         print("  [ERROR] could not make a block from {}".format(path)); return None
     linked = False
@@ -3181,12 +3181,12 @@ def api_insert(path, name, layer_index):
 
 
 def load_scans():
-    """LoadScans: pick many STL / OBJ / PLY files; each one becomes a LINKED
+    """LoadMeshes: pick many STL / OBJ / PLY files; each one becomes a LINKED
     block (embedded if Rhino refuses the link) at its own coordinates, on its
     own layer under 'Reference Meshes- Msh2classA', with its own colour. Each is hidden after
     loading - only the last one stays visible. Files are only read."""
-    files = rs.OpenFileNames("Load scans as linked blocks",
-                             "Scans (*.stl;*.obj;*.ply)|*.stl;*.obj;*.ply|All files (*.*)|*.*||")
+    files = rs.OpenFileNames("Load meshes as linked blocks",
+                             "Meshes (*.stl;*.obj;*.ply)|*.stl;*.obj;*.ply|All files (*.*)|*.*||")
     if not files: return
     single_view()
     n_old = len(scan_instances())
@@ -3197,7 +3197,7 @@ def load_scans():
     # must not be one of the scan layers (the parent 'Reference Meshes- Msh2classA' is fine)
     if in_scan_root(sc.doc.Layers[old_layer].FullPath, below=True):
         sc.doc.Layers.SetCurrentLayerIndex(root, True)
-    try: Rhino.UI.StatusBar.ShowProgressMeter(0, len(files), "Loading scans", True, True)
+    try: Rhino.UI.StatusBar.ShowProgressMeter(0, len(files), "Loading meshes", True, True)
     except Exception: pass
     done = []; hidden = set()
     stopped = False
@@ -3208,7 +3208,7 @@ def load_scans():
             name = os.path.splitext(os.path.basename(path))[0]
             if os.path.splitext(path)[1].lower() not in (".stl", ".obj", ".ply"):
                 print("  [SKIP] {} - only STL / OBJ / PLY".format(path)); continue
-            busy = show_busy("Loading scan {}/{}: {} ...".format(n + 1, len(files), name))
+            busy = show_busy("Loading mesh {}/{}: {} ...".format(n + 1, len(files), name))
             print("  loading {}/{}: {}".format(n + 1, len(files), path))
             li = None
             try:
@@ -3241,16 +3241,16 @@ def load_scans():
             sc.doc.Layers.SetCurrentLayerIndex(old_layer, True)
         sc.doc.Views.Redraw()
     if stopped:
-        print("[LoadScans] STOPPED by Esc - {} of {} scan(s) loaded, the rest skipped".format(len(done), len(files)))
+        print("[LoadMeshes] STOPPED by Esc - {} of {} mesh(s) loaded, the rest skipped".format(len(done), len(files)))
     else:
-        print("[LoadScans] {} of {} scan(s) loaded as blocks under layer '{}' (only the last one shown)".format(
+        print("[LoadMeshes] {} of {} mesh(s) loaded as blocks under layer '{}' (only the last one shown)".format(
             len(done), len(files), SCAN_ROOT))
 
 
 
 
 def prefetch_meshes(insts):
-    """Read the meshes (and the mirror points) of the visible scans NOW,
+    """Read the meshes (and the mirror points) of the visible meshes NOW,
     never for the first time inside a drawing / mouse event. After a plain
     mesh was moved its points are made again here."""
     for o in insts:
@@ -3265,8 +3265,8 @@ _RAY_READY = set()
 def prepare_scans(insts, tool):
     """Everything slow BEFORE the first click, behind a 'please wait': the
     meshes are read, the mirror points made and the ray search tree of every
-    visible scan built (that tree made the first click take ~10 s)."""
-    busy = show_busy("{}: preparing the scans for clicking (first time only, big scans take a few seconds)...".format(tool))
+    visible mesh built (that tree made the first click take ~10 s)."""
+    busy = show_busy("{}: preparing the meshes for clicking (first time only, big meshes take a few seconds)...".format(tool))
     try:
         prefetch_meshes(insts)
         for o0 in insts:
@@ -3287,7 +3287,7 @@ def prepare_scans(insts, tool):
 
 
 def view_constrain(gp):
-    """Clicks on the scan: the point comes from OUR ray on the scans, Rhino
+    """Clicks on the mesh: the point comes from OUR ray on the meshes, Rhino
     only has to give a point on the cursor line. Unconstrained it uses the
     construction plane - above the horizon in Perspective there is none and
     Rhino shows the 'no entry' cursor and takes no click. A plane through the
@@ -3300,9 +3300,9 @@ def view_constrain(gp):
 
 
 def pause_scanmirror():
-    """ScanMirror (left on, maybe from an earlier run of the script) would draw
+    """MeshMirror (left on, maybe from an earlier run of the script) would draw
     a second mirror that the MirrorPreview option cannot hide - off while a
-    scan tool runs. -> its plane axis, or None."""
+    mesh tool runs. -> its plane axis, or None."""
     cur = sc.sticky.get("M2CA_scanmir")
     if cur is None: return None
     try: cur.off()
@@ -3328,7 +3328,7 @@ def local_mesh(idef):
     """The block's mesh in block coordinates (once per definition)."""
     m = _LOCAL_MESH.get(idef.Id)
     if m is not None: return m
-    busy = show_busy("Reading scan {} (once)...".format(idef.Name))
+    busy = show_busy("Reading mesh {} (once)...".format(idef.Name))
     joined = rg.Mesh()
 
     def collect(d, x):
@@ -3354,7 +3354,7 @@ def is_click(res):
 
 
 def pick_on_scans(gp, insts):
-    """Point under the click on the VISIBLE scans (front-most). The scan tools
+    """Point under the click on the VISIBLE meshes (front-most). The mesh tools
     ask Rhino only for the WINDOW point of the click (Get(.., True)): Rhino
     then needs no 3D point, so it never shows the 'no entry' cursor (above
     the horizon, after zooming in) - the ray is our own, through that pixel."""
@@ -3378,7 +3378,7 @@ def pick_on_scans(gp, insts):
 
 def ray_on_scans(view, P, insts):
     """Ray from the eye through P (a point Rhino reports on the cursor line)
-    -> (hit, object) on the front-most visible scan. Blocks: ray in the
+    -> (hit, object) on the front-most visible mesh. Blocks: ray in the
     block's own coordinates (no mesh copies); plain meshes: as they are."""
     try:
         vp = view.ActiveViewport
@@ -3396,7 +3396,7 @@ def ray_on_scans(view, P, insts):
 
 
 def ray_hit_scans(a_, d0, insts):
-    """Ray a_ + t*d0 (t > 0) -> (hit, object) on the front-most visible scan."""
+    """Ray a_ + t*d0 (t > 0) -> (hit, object) on the front-most visible mesh."""
     d0 = rg.Vector3d(d0)
     if d0.Length < 1e-12: return None
     d0.Unitize()
@@ -3429,9 +3429,9 @@ SYM_TEXT = {"YZ": "YZ (x = 0, the middle line seen in the Front view)",
 
 
 def mirror_normal(tool="Center", allowed=("YZ", "XZ", "XY")):
-    """Symmetry plane for the scan tools = MirrorPlane. Off: the default YZ
+    """Symmetry plane for the mesh tools = MirrorPlane. Off: the default YZ
     (the middle line of the Front view) is taken - no question. Change it
-    with the SymPlane option of ScanCenter / ScanFloor (or MirrorPlane)."""
+    with the SymPlane option of MeshCenter / MeshFloor (or MirrorPlane)."""
     cur = opt_get("mirror", "Off")
     if cur not in allowed:
         cur = SYM_DEFAULT if SYM_DEFAULT in allowed else allowed[0]
@@ -3441,7 +3441,7 @@ def mirror_normal(tool="Center", allowed=("YZ", "XZ", "XY")):
 
 
 def add_sym_option(gp, allowed=("YZ", "XZ", "XY")):
-    """SymPlane list option on a scan-tool prompt -> its index."""
+    """SymPlane list option on a mesh-tool prompt -> its index."""
     cur = opt_get("mirror", SYM_DEFAULT)
     return gp.AddOptionList("SymPlane", list(allowed), list(allowed).index(cur) if cur in allowed else 0)
 
@@ -3455,7 +3455,7 @@ def set_sym_from_option(gp, allowed=("YZ", "XZ", "XY")):
 
 def single_view():
     """One maximized Perspective view: every viewport keeps its own copy of
-    the big scan meshes for display, 4 views are much slower than one."""
+    the big meshes for display, 4 views are much slower than one."""
     try:
         views = list(sc.doc.Views.GetViewList(True, False))
         per = None
@@ -3481,7 +3481,7 @@ def _xf_is_identity(X, tol=1e-12):
 
 
 def _apply(insts, applied, T):
-    """Bring every chosen scan to T * (its place at the start of the tool).
+    """Bring every chosen mesh to T * (its place at the start of the tool).
     applied = {id: transform given so far} - works the same for blocks and
     plain meshes; nothing is touched when T did not change."""
     for obj in insts:
@@ -3528,7 +3528,7 @@ def draw_pin(d, m, p, text, colour, leader=True, up=34):
 
 class _ScanDraw(object):
     """Dynamic drawing while clicking: tags as pins, the mirrored copy (blue
-    points) of the visible scans, and (Fine) the gumball."""
+    points) of the visible meshes, and (Fine) the gumball."""
     def __init__(self, insts, axis):
         self.insts = insts; self.axis = axis; self.dots = []; self.lines = []
         self.show_mirror = axis is not None
@@ -3591,8 +3591,8 @@ _ScanDraw.draw_spheres = _draw_spheres
 
 def scan_center():
     """Center: pairs LEFT / RIGHT on the same features; after every pair the
-    chosen scans (hidden ones too) are turned and moved so the symmetry plane
-    of the pairs is the MirrorPlane. Blue points = the mirrored scans.
+    chosen meshes (hidden ones too) are turned and moved so the symmetry plane
+    of the pairs is the MirrorPlane. Blue points = the mirrored meshes.
     Fine: a gumball in world axes (move / turn only, very fine steps) to
     tune by eye with the live mirror and the tags."""
     single_view()
@@ -3733,7 +3733,7 @@ def _scan_center(axis, insts):
             oi = gp.Option().Index
             if oi == o_cancel:
                 _apply(insts, applied, rg.Transform.Identity); sc.doc.Views.Redraw()
-                print("[Center] cancelled - scans back where they were"); return
+                print("[Center] cancelled - meshes back where they were"); return
             if oi == o_fine:
                 if st["left"] is not None:
                     print("  (the unpaired LEFT tag is dropped - pairs are locked after Fine)"); st["left"] = None
@@ -3776,7 +3776,7 @@ def _scan_center(axis, insts):
                 continue
             hit = pick_on_scans(gp, insts)
             if hit is None:
-                print("  click ON a visible scan"); continue
+                print("  click ON a visible mesh"); continue
             ok, inv = total().TryGetInverse()
             pb = rg.Point3d(hit[0]); pb.Transform(inv)       # back to base coordinates
             if st["left"] is None:
@@ -3784,7 +3784,7 @@ def _scan_center(axis, insts):
             else:
                 pairs.append((st["left"], pb)); st["left"] = None
                 st["T"] = solve(); commit()
-                print("  pair {}: scans turned {:.2f} deg and moved onto the symmetry plane".format(len(pairs), st["tilt"]))
+                print("  pair {}: meshes turned {:.2f} deg and moved onto the symmetry plane".format(len(pairs), st["tilt"]))
                 print_devs()
                 if st["tilt"] > 15.0:
                     print("  [WARN] that is a big turn: are LEFT/RIGHT really across the car and is MirrorPlane "
@@ -3793,7 +3793,7 @@ def _scan_center(axis, insts):
             continue
         if res == Rhino.Input.GetResult.Cancel:          # Esc = cancel, like the Cancel option
             _apply(insts, applied, rg.Transform.Identity); sc.doc.Views.Redraw()
-            print("[Center] cancelled (Esc) - scans back where they were"); return
+            print("[Center] cancelled (Esc) - meshes back where they were"); return
         break
     if pairs:
         print_devs()
@@ -3809,12 +3809,12 @@ AUTOFIT_ITERS = 12
 
 
 def autofit_radius():
-    """Sphere radius around every tag for AutoFit (model units); 0 = whole scan."""
+    """Sphere radius around every tag for AutoFit (model units); 0 = whole mesh."""
     return float(opt_get("fit_radius", 50.0 / _mm_per_unit()))
 
 
 def _scan_closest(geos, q):
-    """Nearest point of the visible scans to world point q -> (point, normal) or None."""
+    """Nearest point of the visible meshes to world point q -> (point, normal) or None."""
     best = None
     for (mesh, xf, inv) in geos:
         lq = rg.Point3d(q); lq.Transform(inv)
@@ -3829,13 +3829,13 @@ def _scan_closest(geos, q):
 
 
 def autofit_mirror(insts, axis, centres=None, radius=0.0):
-    """Find the scan's OWN symmetry plane: scan points are mirrored in the world
-    plane and pulled onto the scan (point-to-plane ICP); points that land far
+    """Find the mesh's OWN symmetry plane: mesh points are mirrored in the world
+    plane and pulled onto the mesh (point-to-plane ICP); points that land far
     from it (holes, parts scanned on one side only, asymmetric details) are
     left out. -> (transform that puts that plane onto the world plane,
     report text) or (None, reason).
-    centres + radius: only scan points inside spheres around the tags (the
-    places you marked as symmetric) - fast on any scan size and nothing
+    centres + radius: only mesh points inside spheres around the tags (the
+    places you marked as symmetric) - fast on any mesh size and nothing
     asymmetric gets in."""
     geos = []; pts = []
     spheres = bool(centres) and radius > 0
@@ -3861,8 +3861,8 @@ def autofit_mirror(insts, axis, centres=None, radius=0.0):
         for i in range(0, len(lp), step):
             q = rg.Point3d(lp[i]); q.Transform(geo[1]); pts.append(q)
     if len(pts) < 50 or not geos:
-        return None, ("too few scan points inside the tag spheres - larger AutoFitRadius?" if spheres
-                      else "too few scan points (are the scans visible?)")
+        return None, ("too few mesh points inside the tag spheres - larger AutoFitRadius?" if spheres
+                      else "too few mesh points (are the meshes visible?)")
     nrm = [0.0, 0.0, 0.0]; nrm[axis] = 1.0
     E = rg.Vector3d(nrm[0], nrm[1], nrm[2])
     M = rg.Transform.Mirror(rg.Point3d(0, 0, 0), E)
@@ -3881,7 +3881,7 @@ def autofit_mirror(insts, axis, centres=None, radius=0.0):
             c, n = hit
             rows.append((q, c, n, q.DistanceTo(c)))
         if len(rows) < 30:
-            return None, "the mirrored scan does not land on the scan (centre the pairs first)"
+            return None, "the mirrored mesh does not land on the mesh (centre the pairs first)"
         med = median([r[3] for r in rows])
         keep = [r for r in rows if r[3] <= max(3.0 * med, 1e-6)]
         used = len(keep)
@@ -3922,9 +3922,9 @@ def autofit_mirror(insts, axis, centres=None, radius=0.0):
     oo = rg.Point3d(o); oo.Transform(rot)
     move = rg.Transform.Translation(-E * (oo.X * E.X + oo.Y * E.Y + oo.Z * E.Z)) * rot
     ang = math.degrees(math.acos(max(-1.0, min(1.0, n * E))))
-    txt = ("[{}] ".format("spheres r={:g} around {} tags".format(radius, len(centres)) if spheres else "whole scan") +
-           "mirror-to-scan distance (median) {} -> {}, {} of {} points used; "
-           "scans turned {:.4f} deg, centre moved {}".format(fl(first), fl(last), used, len(base), ang,
+    txt = ("[{}] ".format("spheres r={:g} around {} tags".format(radius, len(centres)) if spheres else "whole mesh") +
+           "mirror-to-mesh distance (median) {} -> {}, {} of {} points used; "
+           "meshes turned {:.4f} deg, centre moved {}".format(fl(first), fl(last), used, len(base), ang,
                                                                   fl(abs(o.X * E.X + o.Y * E.Y + o.Z * E.Z))))
     return move, txt
 
@@ -3935,7 +3935,7 @@ _AXES = (rg.Vector3d(1, 0, 0), rg.Vector3d(0, 1, 0), rg.Vector3d(0, 0, 1)) if IN
 
 def _fine_pivot(insts, axis, pairs, world):
     """Turning point: the middle of the tags, put ON the symmetry plane; no
-    tags: the middle of the visible scans."""
+    tags: the middle of the visible meshes."""
     if pairs:
         c = rg.Point3d(0, 0, 0)
         for (L_, R_) in pairs:
@@ -4069,7 +4069,7 @@ def _fine(insts, axis, drw, st, commit, print_devs, pairs, world, fit_fn=None):
     """Fine: drag an ARROW = move along that world axis, a RING = turn about
     that world axis, around a point on the symmetry plane. Every pixel of the
     drag is MovePerPx model units / DegPerPx degrees - very small steps.
-    All chosen scans move, also the hidden ones. Enter / Back = keep,
+    All chosen meshes move, also the hidden ones. Enter / Back = keep,
     Esc = undo the Fine moves of this round. fit_fn: the tool's own Fit
     (Align); without it AutoFit is the mirror fit of Center."""
     F0 = st["F"]
@@ -4176,7 +4176,7 @@ def _fine(insts, axis, drw, st, commit, print_devs, pairs, world, fit_fn=None):
 
 
 def run_autofit(insts, st, commit, print_devs, centres=None):
-    busy = show_busy("AutoFit: fitting the mirror to the scan...")
+    busy = show_busy("AutoFit: fitting the mirror to the mesh...")
     try:
         move, txt = autofit_mirror(insts, st["axis"], centres, autofit_radius())
     except UserAbort:
@@ -4202,7 +4202,7 @@ ALIGN_FIT_ITERS = 15
 
 
 def all_scan_insts():
-    """Every scan block: once scans are aligned to each other they move as
+    """Every mesh block: once meshes are aligned to each other they move as
     ONE structure (Center, Floor, Setup never break the alignment)."""
     return [o for (o, lp) in scan_instances()]
 
@@ -4219,7 +4219,7 @@ def align_parent_map():
 
 
 def align_branch(root_id):
-    """The scan root_id and every scan aligned to it, directly or further down."""
+    """The mesh root_id and every mesh aligned to it, directly or further down."""
     par = align_parent_map()
     out = {str(root_id)}
     grew = True
@@ -4241,8 +4241,8 @@ def _xf_from_rigid(R, t):
 
 
 def _update_setups_after_align(moved_ids):
-    """Every saved setup keeps the alignment: the moved scans get, in each
-    setup, the place they now have relative to a scan that did not move."""
+    """Every saved setup keeps the alignment: the moved meshes get, in each
+    setup, the place they now have relative to a mesh that did not move."""
     data = _read_setups()
     if not data: return
     cur = dict((str(o.Id), o) for o in all_scan_insts())
@@ -4276,14 +4276,14 @@ def _update_setups_after_align(moved_ids):
 
 
 def scan_align():
-    """Align: click a point on the scan that STAYS, then the same point on the
-    scan that MOVES - at least 3 such pairs. The moving scan (and every scan
+    """Align: click a point on the mesh that STAYS, then the same point on the
+    mesh that MOVES - at least 3 such pairs. The moving mesh (and every mesh
     aligned to it before) jumps onto the other one after each pair. Fit =
     automatic on the overlap, Fine = gumball. Enter = done, Esc = cancel."""
     single_view()
     insts = all_scan_insts()
     if len(insts) < 2:
-        print("[Align] needs two scans at least"); return
+        print("[Align] needs two meshes at least"); return
     prepare_scans(insts, "Align")
     mir_axis = pause_scanmirror()
     try:
@@ -4346,8 +4346,8 @@ def _scan_align(insts):
 
     def fit():
         """ICP only inside the spheres (AutoFitRadius) around the pairs, like
-        AutoFit of Center: moving-scan points there -> closest points of the
-        scan that stays. The rest of the scans (extra material, free ends)
+        AutoFit of Center: moving-mesh points there -> closest points of the
+        mesh that stays. The rest of the meshes (extra material, free ends)
         is never used."""
         fixed = sc.doc.Objects.FindId(st["fixed_obj"].Id) if st.get("fixed_obj") else None
         g = scan_geo(fixed) if fixed is not None else None
@@ -4378,7 +4378,7 @@ def _scan_align(insts):
                     q = rg.Point3d(q0); q.Transform(geo[1]); q.Transform(tinv)
                     pts.append(q)                              # base coordinates of the moving scans
         if len(pts) < 30:
-            print("  too few scan points inside the spheres - larger AutoFitRadius?"); return
+            print("  too few mesh points inside the spheres - larger AutoFitRadius?"); return
         busy = show_busy("Align: Fit...")
         keep = []
         try:
@@ -4411,7 +4411,7 @@ def _scan_align(insts):
         if locked:
             gp.SetCommandPrompt("Align: Fit / Fine done <right click = done, ResetFine, Esc = cancel>")
         else:
-            gp.SetCommandPrompt("Align pair {}: point on the scan that {} <right click = done, Esc = cancel>".format(
+            gp.SetCommandPrompt("Align pair {}: point on the mesh that {} <right click = done, Esc = cancel>".format(
                 len(pairs) + 1, "STAYS" if st["first"] is None else "MOVES"))
         gp.AcceptNothing(True)
         o_undo = o_fit = o_fine = o_reset = -99
@@ -4453,24 +4453,24 @@ def _scan_align(insts):
                 print("  pairs are locked after Fit / Fine (ResetFine = back to the pairs)"); continue
             hit = pick_on_scans(gp, insts)
             if hit is None:
-                print("  click ON a visible scan"); continue
+                print("  click ON a visible mesh"); continue
             p, obj = hit
             if st["first"] is None:                            # a point on the scan that stays
                 if st["fixed"] is not None and str(obj.Id) != st["fixed"]:
-                    print("  the first point of a pair goes on the scan that STAYS"); continue
+                    print("  the first point of a pair goes on the mesh that STAYS"); continue
                 st["first"] = rg.Point3d(p)
                 if st["fixed"] is None: st["fixed"] = str(obj.Id); st["fixed_obj"] = obj
             else:                                              # the same point on the scan that moves
                 if str(obj.Id) == st["fixed"]:
-                    print("  the second point goes on the scan that MOVES"); continue
+                    print("  the second point goes on the mesh that MOVES"); continue
                 if st["moving"] is None:
                     branch = align_branch(obj.Id)
                     if st["fixed"] in branch:
-                        print("  this scan carries the one that stays (it was aligned to it) - align the other way"); continue
+                        print("  this mesh carries the one that stays (it was aligned to it) - align the other way"); continue
                     st["moving"] = str(obj.Id); st["ids"] = branch; st["moving_obj"] = obj
                     st["set"] = [o for o in insts if str(o.Id) in branch]
                 elif str(obj.Id) not in st["ids"]:
-                    print("  the second point goes on the same moving scan as before"); continue
+                    print("  the second point goes on the same moving mesh as before"); continue
                 ok, inv = total().TryGetInverse()
                 pb = rg.Point3d(p); pb.Transform(inv)
                 pairs.append((st["first"], pb)); st["first"] = None
@@ -4483,7 +4483,7 @@ def _scan_align(insts):
             if st["set"]:
                 _apply(st["set"], applied, rg.Transform.Identity)
             sc.doc.Views.Redraw()
-            print(tag + " cancelled - scans back where they were"); return
+            print(tag + " cancelled - meshes back where they were"); return
         break
     if not pairs:
         print(tag + " nothing aligned"); return
@@ -4498,8 +4498,8 @@ def _scan_align(insts):
             pass
     _update_setups_after_align(st["ids"])
     print_devs()
-    print(tag + " done: {} scan(s) moved{}".format(len(st["set"]), "" if len(st["set"]) == 1 else
-                                                    " (the moved scan carries the ones aligned to it)"))
+    print(tag + " done: {} mesh(s) moved{}".format(len(st["set"]), "" if len(st["set"]) == 1 else
+                                                    " (the moved mesh carries the ones aligned to it)"))
 
 
 
@@ -4537,7 +4537,7 @@ def _scan_floor(axis, insts):
             continue
         if is_click(res):
             hit = pick_on_scans(gp, insts)
-            if hit is None: print("  click ON a visible scan"); continue
+            if hit is None: print("  click ON a visible mesh"); continue
             pts.append(hit[0]); drw.dots.append((hit[0], "F{}".format(len(pts)))); sc.doc.Views.Redraw()
             continue
         break
@@ -4589,7 +4589,7 @@ def _scan_floor(axis, insts):
         math.degrees(ang), "" if ref is None else ", front/back 0 at the clicked point"))
     if abs(roll) > 0.05:
         print("  [INFO] the floor also leans {:.2f} deg sideways - NOT corrected (it would break the symmetry); "
-              "check the Center pairs or the scans".format(roll))
+              "check the Center pairs or the meshes".format(roll))
     save_setup_prompt(insts, "Floor")
 
 
@@ -4597,12 +4597,12 @@ def _scan_floor(axis, insts):
 # A setup = the position of every scan block under a name (front, rear ...).
 # Saved ONLY with the scans: 'scan_setups.json' in the folder of the scan
 # files, written at once. Nothing is stored in the .3dm - any file finds the
-# setups again after LoadScans of the same scans.
+# setups again after LoadMeshes of the same scans.
 SETUP_JSON = "scan_setups.json"
 
 
 def _setup_files():
-    """scan_setups.json in every folder the loaded scans come from."""
+    """scan_setups.json in every folder the loaded meshes come from."""
     out = []
     for (o, lp) in scan_instances():
         src = obj_src(o)
@@ -4613,7 +4613,7 @@ def _setup_files():
 
 
 def _read_setups():
-    """All setups from scan_setups.json in the scan folders (newest copy of a
+    """All setups from scan_setups.json in the mesh folders (newest copy of a
     name wins when two folders have it)."""
     data = {}
     for f in _setup_files():
@@ -4630,7 +4630,7 @@ def _read_setups():
 
 
 def _write_setups(data):
-    """Write to scan_setups.json in every scan folder. -> files written."""
+    """Write to scan_setups.json in every mesh folder. -> files written."""
     txt = json.dumps(data, indent=1, sort_keys=True)
     done = []
     for f in _setup_files():
@@ -4643,7 +4643,7 @@ def _write_setups(data):
 
 
 def _scan_name(obj):
-    """Key of a scan in a setup: its block name (= the scan file name)."""
+    """Key of a mesh in a setup: its block name (= the mesh file name)."""
     return obj.InstanceDefinition.Name
 
 
@@ -4652,8 +4652,8 @@ def obj_src(obj):
 
 
 def _setup_record(st, o):
-    """The entry of scan block o in setup st: by block name, else by the scan
-    file name (a new .3dm after LoadScans), else by the old full-path key."""
+    """The entry of mesh block o in setup st: by block name, else by the mesh
+    file name (a new .3dm after LoadMeshes), else by the old full-path key."""
     rec = st.get(_scan_name(o))
     if rec: return rec
     fn = os.path.basename(obj_src(o)).lower()
@@ -4665,12 +4665,12 @@ def _setup_record(st, o):
 
 def save_setup_prompt(insts, what):
     if insts and not any(isinstance(o, ro.InstanceObject) for o in insts):
-        print("  (plain meshes carry their position in the mesh itself - setups are for scan blocks only)")
+        print("  (plain meshes carry their position in the mesh itself - setups are for mesh blocks only)")
         return
     dflt = sc.sticky.get("M2CA_setup", "front")
     gs = ric.GetString()
-    gs.SetCommandPrompt("{} done. Remember these scan positions under a NAME (e.g. front, rear) to bring them back "
-                        "later with ScanSetup - type a name + Enter, Enter alone = '{}'".format(what, dflt))
+    gs.SetCommandPrompt("{} done. Remember these mesh positions under a NAME (e.g. front, rear) to bring them back "
+                        "later with MeshSetup - type a name + Enter, Enter alone = '{}'".format(what, dflt))
     gs.AcceptNothing(True)
     gs.AddOption("DontSave")
     res = gs.Get()
@@ -4679,7 +4679,7 @@ def save_setup_prompt(insts, what):
     elif res == Rhino.Input.GetResult.String:
         name = (gs.StringResult() or "").strip() or dflt
     else:                                          # DontSave / Esc
-        print("  positions not saved as a setup (the scans stay where they are)"); return
+        print("  positions not saved as a setup (the meshes stay where they are)"); return
     sc.sticky["M2CA_setup"] = name
     data = _read_setups()
     st = {"_saved": time.time()}
@@ -4689,29 +4689,29 @@ def save_setup_prompt(insts, what):
                              "block": o.InstanceDefinition.Name, "file": os.path.basename(obj_src(o))}
     data[name] = st
     if not _setup_files():
-        print("  [Setup] not saved: these scan blocks do not know their scan files (load them with LoadScans)")
+        print("  [Setup] not saved: these mesh blocks do not know their mesh files (load them with LoadMeshes)")
         return
     where = _write_setups(data)
     n = len([k for k in st if not k.startswith("_")])
-    print("[Setup] '{}' saved: {} scan(s), in {}".format(name, n, " and ".join(where) or "-"))
+    print("[Setup] '{}' saved: {} mesh(s), in {}".format(name, n, " and ".join(where) or "-"))
 
 
 def scan_setup():
-    """ScanSetup: apply a saved setup (all scan blocks jump there), save the
+    """MeshSetup: apply a saved setup (all mesh blocks jump there), save the
     present positions under a name, or remove a setup."""
     data = _read_setups()
     names = sorted(data.keys())
     SAVE = "<save the present positions as ...>"; REMOVE = "<remove a setup ...>"
     items = names + [SAVE] + ([REMOVE] if names else [])
-    choice = rs.ListBox(items, "Scan setups (positions of the scan blocks)", "ScanSetup")
+    choice = rs.ListBox(items, "Mesh setups (positions of the mesh blocks)", "MeshSetup")
     if choice is None: return
     if choice == SAVE:
         save_setup_prompt([], "Setup"); return
     if choice == REMOVE:
-        gone = rs.ListBox(names, "Remove which setup?", "ScanSetup - remove")
+        gone = rs.ListBox(names, "Remove which setup?", "MeshSetup - remove")
         if not gone: return
-        if rs.MessageBox("Remove the setup '{}'?\n(The scans stay where they are.)".format(gone), 4 | 32,
-                         "ScanSetup - remove") != 6:
+        if rs.MessageBox("Remove the setup '{}'?\n(The meshes stay where they are.)".format(gone), 4 | 32,
+                         "MeshSetup - remove") != 6:
             return
         del data[gone]
         where = _write_setups(data)
@@ -4739,7 +4739,7 @@ def scan_setup():
     missing = [o.InstanceDefinition.Name for o in missing] if ref is None else []
     sc.sticky["M2CA_setup"] = choice
     sc.doc.Views.Redraw()
-    print("[Setup] '{}' applied to {} scan(s){}".format(choice, n,
+    print("[Setup] '{}' applied to {} mesh(s){}".format(choice, n,
           "" if not missing else "; not in this setup (left as they are): " + ", ".join(missing)))
 
 
@@ -4758,7 +4758,7 @@ def _cloud_key(obj):
 
 
 def scan_cloud(obj, build=True):
-    """Vertices of the scan as a point cloud in its own coordinates, thinned
+    """Vertices of the mesh as a point cloud in its own coordinates, thinned
     to MIRROR_PT_MAX. build=False: only what was made before (drawing)."""
     key = _cloud_key(obj)
     c = _LOCAL_CLOUD.get(key)
@@ -4776,9 +4776,9 @@ def scan_cloud(obj, build=True):
 
 
 def draw_mirror_points(d, axis, objs):
-    """Mirrored copies of the scan instances objs as opaque points (drawn
+    """Mirrored copies of the mesh instances objs as opaque points (drawn
     only, nothing added to the file). Lifted a little towards the eye -
-    same place on screen - so points lying ON the real scan are not hidden
+    same place on screen - so points lying ON the real mesh are not hidden
     by it; points clearly behind it still are (no see-through clutter)."""
     if not objs: return
     nrm = [0.0, 0.0, 0.0]; nrm[axis] = 1.0
@@ -4820,7 +4820,7 @@ def draw_mirror_points(d, axis, objs):
 
 
 def draw_mirrored_scans(d, axis, mat=None, ids=None):
-    """ScanMirror: mirrored copies of the visible scans as points."""
+    """MeshMirror: mirrored copies of the visible meshes as points."""
     if ids is None:
         objs = [o for (o, lp) in scan_objects()]
     else:
@@ -4830,7 +4830,7 @@ def draw_mirrored_scans(d, axis, mat=None, ids=None):
 
 class _ScanMirrorDraw(object):
     """Pipeline events (no conduit subclass - same way as the rest of the
-    script); kept in sticky so the next ScanMirror can switch it off."""
+    script); kept in sticky so the next MeshMirror can switch it off."""
     def __init__(self, axis, ids=None):
         self.axis = axis; self.ids = ids              # scans to mirror (ids; None = all)
         self._b = self.bbox; self._d = self.draw      # same handler objects for += and -=
@@ -4863,15 +4863,15 @@ class _ScanMirrorDraw(object):
 
 
 def scan_mirror():
-    """ScanMirror: mirrored copies of the VISIBLE scan blocks as blue points, drawn only (nothing added to the file). Again =
-    off. Switched off while ScanCenter / ScanFloor run, back on after."""
+    """MeshMirror: mirrored copies of the VISIBLE mesh blocks as blue points, drawn only (nothing added to the file). Again =
+    off. Switched off while MeshCenter / MeshFloor run, back on after."""
     cur = sc.sticky.get("M2CA_scanmir")
     if cur is not None:
         try: cur.off()
         except Exception: pass
         sc.sticky["M2CA_scanmir"] = None
-        sc.doc.Views.Redraw(); print("[ScanMirror] off"); return
-    axis = mirror_normal("ScanMirror")
+        sc.doc.Views.Redraw(); print("[MeshMirror] off"); return
+    axis = mirror_normal("MeshMirror")
     if axis is None: return
     objs = [o for (o, lp) in scan_objects() if scan_visible(o)]
     prefetch_meshes(objs)
@@ -4879,13 +4879,13 @@ def scan_mirror():
     c = _ScanMirrorDraw(axis, [o.Id for o in objs]); c.on()
     sc.sticky["M2CA_scanmir"] = c
     sc.doc.Views.Redraw()
-    print("[ScanMirror] {} scan(s) mirrored, shown as blue points (ScanMirror again = off)".format(n))
+    print("[MeshMirror] {} mesh(s) mirrored, shown as blue points (MeshMirror again = off)".format(n))
 
 
-SCAN_TOOL_LABEL = {"LoadScans": "Load scans", "ScanAlign": "Align", "ScanCenter": "Center", "ScanFloor": "Floor",
-                   "ScanSetup": "Setups", "ScanMirror": "Mirror on/off"}
-SCAN_TOOLS = (("LoadScans", load_scans), ("ScanAlign", scan_align), ("ScanCenter", scan_center),
-              ("ScanFloor", scan_floor), ("ScanSetup", scan_setup), ("ScanMirror", scan_mirror))
+SCAN_TOOL_LABEL = {"LoadMeshes": "Load meshes", "MeshAlign": "Align", "MeshCenter": "Center", "MeshFloor": "Floor",
+                   "MeshSetup": "Setups", "MeshMirror": "Mirror on/off"}
+SCAN_TOOLS = (("LoadMeshes", load_scans), ("MeshAlign", scan_align), ("MeshCenter", scan_center),
+              ("MeshFloor", scan_floor), ("MeshSetup", scan_setup), ("MeshMirror", scan_mirror))
 
 
 # ---- scan tools as panel BUTTONS (and command-line options) -----------------
@@ -4897,7 +4897,7 @@ def scan_tools_ready(on):
 
 
 def post_scan_tool(name):
-    if name == "ScanMirror":                     # only drawing on/off: straight away, nothing to leave
+    if name == "MeshMirror":                     # only drawing on/off: straight away, nothing to leave
         run_scan_tool(name); return
     if not sc.sticky.get("M2CA_tools_ok"):
         print("  [{}] finish the step you are in first (or clear the patch you are drawing)".format(name)); return
@@ -4934,7 +4934,7 @@ SURFACE_TOOLS = (("Fillet", "Fillet"), ("NPatch", "NPatch"), ("GlobalMatch", "Gl
 
 
 def post_surface_tool(name):
-    """A button of the Surfaces group: run in the main loop (like the scan tools)."""
+    """A button of the Surfaces group: run in the main loop (like the mesh tools)."""
     if not sc.sticky.get("M2CA_tools_ok"):
         print("  [{}] finish the step you are in first (or clear the patch you are drawing)".format(name)); return
     sc.sticky["M2CA_pending_tool"] = "SRF:" + name
@@ -4959,9 +4959,9 @@ def surface_tool_buttons(ef, lay):
 
 
 def scan_tool_buttons(ef, lay):
-    """The 'Scans' group of the panel: one button per scan tool."""
+    """The 'Meshes' group of the panel: one button per mesh tool."""
     try:
-        lb = ef.Label(); lb.Text = "Scans"
+        lb = ef.Label(); lb.Text = "Meshes"
         lay.AddRow(lb)
     except Exception:
         pass
@@ -5073,7 +5073,7 @@ def cad_services_button(ef, lay):
 
 
 def open_scan_panel():
-    """Small panel with the scan tools while you pick the scan."""
+    """Small panel with the mesh tools while you pick the mesh."""
     try:
         import Eto.Forms as ef
         import Eto.Drawing as ed
@@ -5115,16 +5115,16 @@ def close_scan_panel(f):
 
 
 def get_scan(preset_id=None):
-    """Pick the scan to work on - or run a scan tool first (they move only
-    the scan BLOCKS; afterwards pick the scan). preset_id: the scan of the
-    session that was left for a scan tool - taken again without asking."""
+    """Pick the mesh to work on - or run a mesh tool first (they move only
+    the mesh BLOCKS; afterwards pick the mesh). preset_id: the mesh of the
+    session that was left for a mesh tool - taken again without asking."""
     obj_id = None
     if preset_id is not None and sc.doc.Objects.FindId(preset_id) is not None:
         obj_id = preset_id
     panel = None if obj_id is not None else open_scan_panel()
     while obj_id is None:
         go = ric.GetObject()
-        go.SetCommandPrompt("Click the scan, or a scan tool <Esc = quit>")
+        go.SetCommandPrompt("Click the mesh, or a mesh tool <Esc = quit>")
         try:
             go.GeometryFilter = ro.ObjectType.Mesh | ro.ObjectType.InstanceReference
         except Exception:
@@ -5283,7 +5283,7 @@ def collect_candidates(mesh):
 
 
 def collect_surfaces(mesh):
-    """Visible single-face surfaces near the scan: (id, brep, bbox, smoothable)."""
+    """Visible single-face surfaces near the mesh: (id, brep, bbox, smoothable)."""
     mb = mesh.GetBoundingBox(False)
     pad = mb.Diagonal.Length * 0.05
     mmin = T(mb.Min); mmax = T(mb.Max)
@@ -5655,20 +5655,20 @@ def edge_side(cand, A, B, ox):
 HELP = """
 ------------------------------------------------------------------
 msh2classA - how it works
-  DRAWING  Side 1: click start, points on the scan, right click = end
+  DRAWING  Side 1: click start, points on the mesh, right click = end
            side. Sides 2, 3: points, right click. Side 4 returns to
            corner 1: optional points, right click = BUILD.
            A click on an edge / curve / its end is always a corner and
            ends the side at once. Two corners on the same edge or curve
            -> that side follows it (G0/G1/G2 to a surface edge).
            Near an edge END the corner snaps to that end (the
-           neighbour's corner); a corner made on the scan within 2 x
-           ScanTol of an edge is moved onto it; points clicked along
-           an edge do not turn that side into a scan side. Narrow
+           neighbour's corner); a corner made on the mesh within 2 x
+           MeshTol of an edge is moved onto it; points clicked along
+           an edge do not turn that side into a mesh side. Narrow
            blend: click its 4 corners = the 4 corners of the two
            patches, both long sides then follow the edges.
   SIDE BUBBLES  Click: G0 -> G1 -> G2.  On a surface edge = continuity
-           to it. On the scan = rows RESERVED for a future neighbour.
+           to it. On the mesh = rows RESERVED for a future neighbour.
            Rows across the patch: G0/curve 1, G1 2, G2 3; CV count =
            sum of the two opposite sides (centre label shows the size).
            Bubble on an EDGE side: G0 -> G1 -> G2 -> G2>G0 -> G1>G0.
@@ -5693,21 +5693,21 @@ msh2classA - how it works
                            edges imply (Coons layout); shape stays
              ToDevUV  UV   the nearest row (+ the one behind) moves onto
                            the place where a WHOLE row is furthest from
-                           the scan; shape stays
-             PullN    N    fit the patch to the scan, CVs only along the
+                           the mesh; shape stays
+             PullN    N    fit the patch to the mesh, CVs only along the
                            normal (free edges also across the edge): the
                            CV layout (EvenUV / StrUV / RelaxUV) stays;
                            neighbours give way with their G0/G1/G2 rows.
-                           A TempPts patch: onto its points, not the scan
+                           A TempPts patch: onto its points, not the mesh
              RstN     N    the smoothest shape its edges / seams allow,
-                           CVs only along the normal, no scan, no points
+                           CVs only along the normal, no mesh, no points
                            (then PullN)
              FreeEdgeEdt   redraw a free edge (no neighbour / mirror): first
                            click the edge (the nearest one lights up), then
-                           a) start AT a corner dot, points on the scan, end
+                           a) start AT a corner dot, points on the mesh, end
                               AT the other corner: only the middle of the
                               edge moves, both corners stay;
-                           b) start BESIDE the patch, points on the scan
+                           b) start BESIDE the patch, points on the mesh
                               where the edge should be, right click: the
                               WHOLE edge (corners too) goes onto that line,
                               the rows behind it follow (fading to the
@@ -5720,18 +5720,18 @@ msh2classA - how it works
                            without snapping: Apply puts them onto the plane)
                            (click = G0 / G1 / G2), Apply -> the NEIGHBOURS
                            come back to this patch (and stay matched among
-                           themselves); the patch itself and the scan are
+                           themselves); the patch itself and the mesh are
                            not used to change anything
            Button colours: green fine, yellow could be better, red = worth
            a click (FairN: curvature bumps, EvenUV: spacing ratio, StrUV:
-           row kinks, RelaxUV: skew, PullN: scan deviation vs ScanTol,
+           row kinks, RelaxUV: skew, PullN: mesh deviation vs MeshTol,
            MatchUVN: seams open or below their G). The numbers are at the
            bottom of the legend. Usual order: row 1 (the CV net), row 2
            (the shape), row 3 when needed - click where it is red.
            Every seam is KEPT at the level it was built with (G0/G1/G2,
            stored on the patch) or set by Match - never lower; older
            patches: a seam that drifted a little still counts as before.
-           Seams opened a little (up to 2 x ScanTol) are closed again.
+           Seams opened a little (up to 2 x MeshTol) are closed again.
            Neighbours change only their continuity rows - except rows that
            CROSS a seam in EvenUV / ToDevUV: the neighbour's matching rows move
            along (no 'S' at the seam). Every seam keeps its G level, the
@@ -5740,20 +5740,20 @@ msh2classA - how it works
            A strip = ONE patch with SrfSplit=AutoSplit.
 options
   DefaultCont    G0Pos / G1Tan / G2Curv: default for every new side.
-  FitSrfTo       ScanMsh = fit the whole scan under the patch
+  FitSrfTo       WholeMesh = fit the whole mesh under the patch
                  TempPts = click points the patch must follow (e.g. to
                            bridge a recess); the rest is as smooth as the
                            edges allow. The points are kept ON the patch:
-                           every button later uses them, not the scan
+                           every button later uses them, not the mesh
                            (RstN = smoothest the edges allow, then PullN =
                            onto the points).
-                 NoScan  = only the edges lie on the scan; the inside is
+                 NoScan  = only the edges lie on the mesh; the inside is
                            the smoothest surface the edges and G0/G1/G2
-                           allow (smoothing has no scan leash there)
+                           allow (smoothing has no mesh leash there)
   SrfSplit       OneSrf = one single-span patch
-                 AutoSplit = as many single-span patches as the scan needs
+                 AutoSplit = as many single-span patches as the mesh needs
                  (cut from one smooth surface, C4 between them)
-  ScanTol        allowed scan deviation in model units: picking CVs,
+  MeshTol        allowed mesh deviation in model units: picking CVs,
                  AutoSplit, the smoothing leash. Compared with 90% of the
                  samples. The Deviation colours use it too.
   HintTolPct     SideLenHint only: allowed deviation in % of the side /
@@ -5774,37 +5774,37 @@ options
                  and grey CV counts on edges / curves
   SideLenHint    while drawing: green = one patch surely works, yellow =
                  works but near the limit, red = end the side at the dot.
-                 Checked (all scale-free): scan deviation (HintTolPct),
-                 how far the scan turns (4CV max 100 deg, 6CV max 130
+                 Checked (all scale-free): mesh deviation (HintTolPct),
+                 how far the mesh turns (4CV max 100 deg, 6CV max 130
                  deg) and that the patch would not wave. From side 3 on
                  the whole patch (inside and both directions) is checked.
-  SCAN TOOLS (buttons in the small panel - before the scan is picked and
+  MESH TOOLS (buttons in the small panel - before the mesh is picked and
   while you work on patches (then the work is left for the tool and comes
-  back with the scan where it is now) - and options at 'Click scan'; they
-  move / turn only the scan BLOCKS - the customer's files are never
+  back with the mesh where it is now) - and options at 'Click mesh'; they
+  move / turn only the mesh BLOCKS - the customer's files are never
   touched, the scale never changes):
-    LoadScans    many STL / OBJ / PLY meshes at once as LINKED blocks
+    LoadMeshes   many STL / OBJ / PLY meshes at once as LINKED blocks
                  (embedded if Rhino refuses the link), each on its own
                  layer under 'Reference Meshes- Msh2classA', own colour; hidden after loading
                  except the last one. PLY point clouds are refused (mesh
                  them first)
-    ScanAlign    scans to each other: click a point on the scan that STAYS,
-                 then the same point on the scan that MOVES; 3+ pairs =
+    MeshAlign    meshes to each other: click a point on the mesh that STAYS,
+                 then the same point on the mesh that MOVES; 3+ pairs =
                  turned + moved (the number = how far off). Fit = automatic,
                  ONLY inside the spheres of AutoFitRadius around the pairs
-                 (as AutoFit of Center; the rest of the scans is never
+                 (as AutoFit of Center; the rest of the meshes is never
                  used), Fine = gumball. Right click = done, Esc = back. Works as a tree:
-                 a scan aligned to another remembers it; aligning a scan
-                 again moves every scan hanging on it too. Saved setups
+                 a mesh aligned to another remembers it; aligning a mesh
+                 again moves every mesh hanging on it too. Saved setups
                  keep the new alignment
-    ScanCenter   click pairs LEFT / RIGHT on the same features of the
-                 visible scans: after every pair ALL scans (one aligned
+    MeshCenter   click pairs LEFT / RIGHT on the same features of the
+                 visible meshes: after every pair ALL meshes (one aligned
                  structure, hidden ones too) turn + move so the symmetry plane of the
                  pairs is the MirrorPlane; blue points = the mirrored
-                 scans (always shown, MirrorPreview = on/off); the
+                 meshes (always shown, MirrorPreview = on/off); the
                  number at every L / R tag = how far the mirrored
                  partner of the other side lies from it (how well the
-                 scan sits there), details in the command line; Enter =
+                 mesh sits there), details in the command line; Enter =
                  done, Esc / Cancel = back as before.
                  Tags are pins: the cross-hair is the exact point; the
                  blue cross = the LEFT tag after the mirror, the number at
@@ -5815,16 +5815,16 @@ options
                  symmetry plane - drag an arrow = move along X/Y/Z, a ring
                  = turn about it; MovePerPx / DegPerPx = step per pixel of
                  the drag (default 0.02 mm / 0.005 deg). Mirror and tags
-                 follow live; all scans move (hidden ones too).
+                 follow live; all meshes move (hidden ones too).
                  Enter = keep, Esc = undo this Fine round. Fine is pinned to
                  the bottom right corner of the view (turns with the view);
                  the yellow cross = the point it turns about.
                  AutoFit (option, in Center and Fine): the mirror is fitted
-                 to the scan itself - scan points mirrored and pulled onto
-                 the scan. With tags: only the points inside spheres of
+                 to the mesh itself - mesh points mirrored and pulled onto
+                 the mesh. With tags: only the points inside spheres of
                  AutoFitRadius (default 50 mm) around every tag - the
                  places you marked as symmetric; AutoFitRadius 0 = whole
-                 scan. Far points (holes, one-sided parts) are left out.
+                 mesh. Far points (holes, one-sided parts) are left out.
                  After a radius change the spheres show see-through for 3 s;
                  SpherePreview = keep them shown.
                  Order: pairs first (rough), then Fine and AutoFit in any
@@ -5832,35 +5832,35 @@ options
                  AutoFit the pairs are LOCKED (a new pair would undo that
                  work); ResetFine = back to the result of the pairs and
                  unlocks them
-    ScanFloor    3+ points on the floor: turns only about the axis across
+    MeshFloor    3+ points on the floor: turns only about the axis across
                  the symmetry plane, moves only up/down (+ front/back to a
                  clicked point) - the symmetry stays; repeat any time.
                  Click the floor on BOTH sides (not along one sill)
-    ScanSetup    apply a saved setup (e.g. front bumper / spoiler / rear),
+    MeshSetup    apply a saved setup (e.g. front bumper / spoiler / rear),
                  save the present positions under a name, or remove one.
-                 Saved only WITH THE SCANS, at once: scan_setups.json in
-                 the folder of the scan files (nothing in the .3dm; any
-                 file finds them after LoadScans of the same scans). Per
-                 scan the 4x4 rotation+move of its block from its 0,0,0
-    ScanMirror   mirrored copies of the visible scans as blue points,
+                 Saved only WITH THE MESHES, at once: scan_setups.json in
+                 the folder of the mesh files (nothing in the .3dm; any
+                 file finds them after LoadMeshes of the same meshes). Per
+                 mesh the 4x4 rotation+move of its block from its 0,0,0
+    MeshMirror   mirrored copies of the visible meshes as blue points,
                  drawn only (again = off)
   VIEW PANEL (small window at the top right of the view, drag it where
   you like - the place is remembered; click to switch; below them the
-  Scans buttons, see SCAN TOOLS):
+  Meshes buttons, see MESH TOOLS):
                  Legend = this short option list (top left);  CV pts =
                  control points of the surface under the mouse, only the
                  ones on the side facing you;  EMap = with the image
                  reflection_matcap_3dPARTdesign_com.png next to the script
                  (if there) the patches are drawn with that matcap, no
                  Rhino EMap window; otherwise Rhino's EMap;  Zebra = Rhino's
-                 analysis on the surfaces (not on the scan) - they show
+                 analysis on the surfaces (not on the mesh) - they show
                  what is really on, also when switched on before the
                  command, and stay as you leave them;  Graph = curvature
                  combs on the patch under the mouse (highest tooth = half
                  the mean edge length);  Deviation = dots on all patches,
-                 green 0, yellow half ScanTol, red ScanTol and more (blue
-                 = scan below), grey no scan; labels: the biggest + and -;
-                 nothing to set for either;  Scan = hide the mesh
+                 green 0, yellow half MeshTol, red MeshTol and more (blue
+                 = mesh below), grey no mesh; labels: the biggest + and -;
+                 nothing to set for either;  Mesh = hide the mesh
                  (points still go onto it), shown again at the end;
                  Mirror = real mirrored copies of the surfaces over
                  MirrorPlane (Zebra / EMap on them too), kept up to date,
@@ -5910,7 +5910,7 @@ options
 # Cont continuity, Pct percent, Len length, Opt option.
 OPT_LISTS = [
     ("DefaultCont", "cont", ["G0Pos", "G1Tan", "G2Curv"], ["G0", "G1", "G2"], "G2"),
-    ("FitSrfTo", "fit", ["ScanMsh", "TempPts", "NoScan"], ["Mesh", "Points", "NoScan"], "Mesh"),
+    ("FitSrfTo", "fit", ["WholeMesh", "TempPts", "NoScan"], ["Mesh", "Points", "NoScan"], "Mesh"),
     ("SrfSplit", "spans", ["OneSrf", "AutoSplit"], ["Single", "Auto"], "Single"),
     ("MirrorPlane", "mirror", ["Off", "XZ", "YZ", "XY"], ["Off", "XZ", "YZ", "XY"], "Off"),
     ("CornerFlow", "flow", ["KinkOK", "Smooth"], ["Kink", "Smooth"], "Kink"),
@@ -5929,7 +5929,7 @@ class SettingsMixin(object):
             cur = opt_get(key, dflt)
             gp.AddOptionList(nm, shown, vals.index(cur) if cur in vals else vals.index(dflt))
             ui[nm] = ("list", key, vals)
-        nums = [("ScanTol", "autotol", self.s_tol(), 1e-6, 1e6, True),
+        nums = [("MeshTol", "autotol", self.s_tol(), 1e-6, 1e6, True),
                 ("HintTolPct", "tolpct", self.s_tolpct(), 0.01, 10.0, self.s_sidehint()),
                 ("MirrorSnapDist", "mtol", self.s_mtol(), 0.0, 1e6, self.s_mirror() != "Off"),
                 ("SnapPctOfView", "snap", self.s_snap(), 0.0, 20.0, True)]
@@ -6005,7 +6005,7 @@ class SettingsMixin(object):
     def s_tolpct(self): return opt_get("tolpct", 0.2)
 
     def s_tol(self):
-        """Allowed scan deviation in model units (CVs, AutoSplit, leash):
+        """Allowed mesh deviation in model units (CVs, AutoSplit, leash):
         0.5 mm unless you set it."""
         default = 0.5 * Rhino.RhinoMath.UnitScale(Rhino.UnitSystem.Millimeters, sc.doc.ModelUnitSystem)
         return opt_get("autotol", default)
@@ -6055,7 +6055,7 @@ class DrawMixin(object):
             self.hover_srf = None
 
     def update_side_hint(self, e):
-        """Can ONE patch follow the scan along the side being drawn?"""
+        """Can ONE patch follow the mesh along the side being drawn?"""
         x, y = e.WindowPoint.X, e.WindowPoint.Y
         last = getattr(self, "hint_xy", None)
         n = len(self.corners)
@@ -6137,7 +6137,7 @@ class DrawMixin(object):
             pass
 
     def hint_normal(self, pts):
-        """Average scan normal at the clicked points, turned like corner 1's
+        """Average mesh normal at the clicked points, turned like corner 1's
         face: 'up' of the patch being drawn."""
         acc = (0.0, 0.0, 0.0); ref = None
         if not hasattr(self.mesh, "ClosestMeshPoint"): return None
@@ -6150,9 +6150,9 @@ class DrawMixin(object):
         return v_unit(acc) if v_len(acc) > 1e-12 else None
 
     def hint_proj(self, q):
-        """Scan point for the hint: the face turned up-ish (not a rib wall,
+        """Mesh point for the hint: the face turned up-ish (not a rib wall,
         not the back of a thin part) straight below / above q along the patch
-        'up'. Closest-point queries only (fast on big scans): first q itself,
+        'up'. Closest-point queries only (fast on big meshes): first q itself,
         then q moved along 'up' until the hit is an up-facing face."""
         n = getattr(self, "hint_n", None)
         m = self.mesh
@@ -6178,7 +6178,7 @@ class DrawMixin(object):
         return c if c.IsValid else q
 
     def patch_hint(self, n, crv, cursor, cv):
-        """Score of the whole future patch: Coons interior on the scan."""
+        """Score of the whole future patch: Coons interior on the mesh."""
         sides = [self.side_poly(k) for k in range(n - 1)]
         dom = crv.Domain
         sides.append([T(self.hint_proj(crv.PointAt(dom.ParameterAt(i / 20.0)))) for i in range(21)])
@@ -6231,10 +6231,10 @@ class DrawMixin(object):
 
 
     def visible(self, p, vp):
-        """Is point p (on or at the scan) on the side of the part you look at?
-        The scan face nearest to it must face the camera - an edge of a patch
+        """Is point p (on or at the mesh) on the side of the part you look at?
+        The mesh face nearest to it must face the camera - an edge of a patch
         on the far side of a thin part (or a label there) is not. Fast: one
-        closest-point query on the scan."""
+        closest-point query on the mesh."""
         try:
             mp = self.mesh.ClosestMeshPoint(p, 0.0)
             if mp is None: return True
@@ -6405,11 +6405,11 @@ class DrawMixin(object):
         lines = [
             ("msh2classA options (Legend button in the view panel hides this, Help = more)", None),
             ("DefaultCont = {}".format(self.s_cont()), "continuity for new sides; side bubbles change one side"),
-            ("FitSrfTo = {}".format({"Mesh": "ScanMsh", "Points": "TempPts"}.get(self.s_fit(), self.s_fit())),
-             "ScanMsh whole scan | TempPts clicked points | NoScan edges only"),
+            ("FitSrfTo = {}".format({"Mesh": "WholeMesh", "Points": "TempPts"}.get(self.s_fit(), self.s_fit())),
+             "WholeMesh whole mesh | TempPts clicked points | NoScan edges only"),
             ("SrfSplit = {}".format("AutoSplit" if self.s_spans() == "Auto" else "OneSrf"),
              "one patch | strip cut into single-span patches"),
-            ("ScanTol = {:g}".format(self.s_tol()), "allowed scan deviation (also the Deviation colours)"),
+            ("MeshTol = {:g}".format(self.s_tol()), "allowed mesh deviation (also the Deviation colours)"),
             ("HintTolPct = {:g}".format(self.s_tolpct()), "SideLenHint deviation, % of the size"),
             ("MirrorPlane = {}".format(self.s_mirror()), "symmetry plane; sides within MirrorSnapDist snap onto it"),
             ("CornerFlow = {}".format("Smooth" if self.s_flow() == "Smooth" else "KinkOK"), "at a neighbour's corner: new side may kink / continues its outline"),
@@ -6421,11 +6421,11 @@ class DrawMixin(object):
             ("  EvenUV", "CV rows to even spacing; shape stays"),
             ("  StrUV", "CV rows straight seen from above; shape stays"),
             ("  RelaxUV", "less skew: CV layout as the four edges imply; shape stays"),
-            ("  PullN", "fit to the scan along the normal; CV layout stays"),
+            ("  PullN", "fit to the mesh along the normal; CV layout stays"),
             ("  FairN", "smoother shape: waves, noise; CV layout stays"),
-            ("  RstN", "smoothest the edges allow (no scan) - then PullN"),
+            ("  RstN", "smoothest the edges allow (no mesh) - then PullN"),
             ("  SmthUVN", "FairN + EvenUV + StrUV at once, strongest"),
-            ("  ToDevUV", "a CV row onto the place furthest from the scan"),
+            ("  ToDevUV", "a CV row onto the place furthest from the mesh"),
             ("  MatchUVN", "after hand edits: neighbours come back to this patch"),
             ("  FreeEdgeEdt", "click a free edge; from corner to corner = middle only, beside it = whole edge"),
             ("  Del", "delete the patch (UndoSrfEdit brings it back)"),
@@ -6676,7 +6676,7 @@ class ViewMixin(object):
             if sid is not None:
                 if self.scan_visible: sc.doc.Objects.Show(sid, True)
                 else: sc.doc.Objects.Hide(sid, True)
-            print("  Scan {} (points still snap onto it)".format("shown" if self.scan_visible else "hidden"))
+            print("  Mesh {} (points still snap onto it)".format("shown" if self.scan_visible else "hidden"))
         elif key == "mirrorview":
             if MIRROR_AXIS.get(self.s_mirror()) is None:
                 print("  Mirror view: set MirrorPlane first (XZ / YZ / XY)")
@@ -6774,8 +6774,8 @@ class ViewMixin(object):
     DEV_N = 17                                 # dots per direction and patch
 
     def _dev_colour(self, dev, scale):
-        """0 = green, half ScanTol = yellow (+, scan above the patch) / cyan
-        (-, below), ScanTol and more = red / blue. Grey = no scan."""
+        """0 = green, half MeshTol = yellow (+, mesh above the patch) / cyan
+        (-, below), MeshTol and more = red / blue. Grey = no mesh."""
         if dev is None:
             return col(150, 150, 150)
         t = min(1.0, abs(dev) / scale)
@@ -6786,10 +6786,10 @@ class ViewMixin(object):
 
     def draw_deviation(self, d):
         """Dots on every patch (DEV_N along its longer side, the same spacing
-        across) coloured by the distance to the scan against ScanTol: green 0,
-        yellow / cyan half ScanTol, red / blue ScanTol and more (scan above /
+        across) coloured by the distance to the mesh against MeshTol: green 0,
+        yellow / cyan half MeshTol, red / blue MeshTol and more (mesh above /
         below). Two labels for the whole model: the biggest + and - (red when
-        more than ScanTol)."""
+        more than MeshTol)."""
         cache = self.__dict__.setdefault("dev_cache", {})
         tol = max(self.s_tol(), 1e-9)
         ids = [s_[0] for s_ in getattr(self, "surfs", [])]
@@ -6975,7 +6975,7 @@ class ViewMixin(object):
         self.mirror_ids = []
 
     def apply_analysis(self, only=None, new_only=False):
-        """Zebra / EMap of the surfaces near the scan (never the scan) as the
+        """Zebra / EMap of the surfaces near the mesh (never the mesh) as the
         buttons say. new_only: just switch it ON on surfaces that lack it (new
         or changed patches) - never switches anything off by itself."""
         for key, mode in analysis_modes().items():
@@ -6994,7 +6994,7 @@ class ViewMixin(object):
                     pass
 
     def restore_view(self):
-        """At the end: panel closed, the scan shown again. Zebra / EMap stay as
+        """At the end: panel closed, the mesh shown again. Zebra / EMap stay as
         the buttons left them (as they were, if you did not touch them)."""
         self.close_panel()
         self.mirror_view = False
@@ -7061,7 +7061,7 @@ class PolygonMixin(object):
 
     def side_rows(self, k):
         """CV rows side k takes across the patch: G0 1, G1 2, G2 3.
-        A side on scan RESERVES rows for its future neighbour (free until then)."""
+        A side on mesh RESERVES rows for its future neighbour (free until then)."""
         kind, c = self.preview_side(k)
         if kind == "mirror":                       # like an invisible mirrored neighbour
             return self.level_for_side(k) + 1
@@ -7071,8 +7071,8 @@ class PolygonMixin(object):
 
     def dir_cv(self, d):
         """CV count in direction d (0 PINK = along sides 1,3; 1 BLUE = along 2,4).
-        = rows of the two END sides of that direction; None = both on scan
-        (auto by ScanTol). Never below the CVs of an edge/curve along d."""
+        = rows of the two END sides of that direction; None = both on mesh
+        (auto by MeshTol). Never below the CVs of an edge/curve along d."""
         ends = (1, 3) if d == 0 else (0, 2)
         along = 0
         for k in ((0, 2) if d == 0 else (1, 3)):
@@ -7091,7 +7091,7 @@ class PolygonMixin(object):
             return "G0 crv"
         if kind == "mirror":
             return u"mirror | {} \u25BC".format(LEVEL_NAME[self.level_for_side(k)])
-        return u"scan | {} later \u25BC".format(LEVEL_NAME[self.level_for_side(k)])
+        return u"mesh | {} later \u25BC".format(LEVEL_NAME[self.level_for_side(k)])
 
     def bubble_tip(self, k):
         kind, c = self.preview_side(k)
@@ -7101,7 +7101,7 @@ class PolygonMixin(object):
         n = self.dir_cv(d_across)
         size = str(n)
         if all(self.preview_side(e)[0] == "scan" for e in ends):
-            size += "+ (more if the scan needs it)"
+            size += "+ (more if the mesh needs it)"
         if kind == "edge":
             return "click: G0 -> G1 -> G2 to this neighbour   (across: {} = {} CV)".format(rows, size)
         if kind == "curve":
@@ -7110,7 +7110,7 @@ class PolygonMixin(object):
             return ("click: G0 -> G1 -> G2 to the mirrored copy ({} plane). G0 = edge on the plane, "
                     "G1 = 2nd row straight across it, G2 = 3rd row at twice its distance   (across: {} = {} CV)".format(
                         self.s_mirror(), rows, size))
-        return ("click: reserve rows for a FUTURE G0 -> G1 -> G2 neighbour here; free (follow the scan) "
+        return ("click: reserve rows for a FUTURE G0 -> G1 -> G2 neighbour here; free (follow the mesh) "
                 "until then   (across: {} = {} CV)".format(rows, size))
 
     def cycle_cv(self, k):
@@ -7159,11 +7159,11 @@ class PolygonMixin(object):
 
     def edge_snap_dist(self):
         """A corner / side point this close (model units) to an edge or its
-        end goes ONTO it: 2 x ScanTol."""
+        end goes ONTO it: 2 x MeshTol."""
         return max(2.0 * self.s_tol(), self.tol_on)
 
     def snap_to_edges(self, pt):
-        """Scan point near an edge/curve -> (point on it, distance), its END
+        """Mesh point near an edge/curve -> (point on it, distance), its END
         preferred (the neighbour's corner); None if nothing is near."""
         dmax = self.edge_snap_dist(); p = T(pt)
         best_end = None; best_on = None
@@ -7233,7 +7233,7 @@ class PolygonMixin(object):
             self.pend = list(moved) + ([last] if last is not None else [])
 
     def end_side_here(self):
-        """Right click while drawing side n: last scan point becomes corner."""
+        """Right click while drawing side n: last mesh point becomes corner."""
         if not self.pend:
             return False
         last = self.pend.pop()
@@ -7245,7 +7245,7 @@ class PolygonMixin(object):
         return True
 
     def side_points(self, k):
-        """Corner A, scan points in click order, corner B."""
+        """Corner A, mesh points in click order, corner B."""
         a = self.corners[k]["pt"]; b = self.corners[(k + 1) % 4]["pt"]
         return [a] + list(self.shape.get(k, [])) + [b]
 
@@ -7256,7 +7256,7 @@ class PolygonMixin(object):
         return smooth_curve(pts)
 
     def handle_pick(self, pt, hits, m=None, sx=None, sy=None):
-        """Scan click = point along the current side (first click = corner 1).
+        """Mesh click = point along the current side (first click = corner 1).
         Click on edge/curve/its end = corner right there, ends the side.
           1. an END of an edge/curve within the snap radius -> the nearest end
              on screen (= the neighbour's corner, exactly)
@@ -7331,10 +7331,10 @@ class PolygonMixin(object):
             return "Patch {}: side 1 start ({}), or hover a patch: patch buttons <right click = finish>".format(
                 len(self.patches) + 1, info)
         if n == 4:
-            return "Side 4 back to corner 1: points on scan <right click = BUILD>"
+            return "Side 4 back to corner 1: points on mesh <right click = BUILD>"
         if not self.pend:
-            return "Side {}: click on scan (or edge/curve = corner) <Undo>".format(n)
-        return "Side {}: more points on scan <right click = end side>".format(n)
+            return "Side {}: click on mesh (or edge/curve = corner) <Undo>".format(n)
+        return "Side {}: more points on mesh <right click = end side>".format(n)
 
     def collect_polygon(self):
         while True:
@@ -7448,7 +7448,7 @@ class PolygonMixin(object):
                         continue
                 if len(self.corners) == 4:
                     if hits:
-                        print("  Side 4 closes at corner 1 - click on scan to bend it, right click = build.")
+                        print("  Side 4 closes at corner 1 - click on mesh to bend it, right click = build.")
                     else:
                         self.pend.append(pt); self.picks.append(("pend",))
                     continue
@@ -7463,7 +7463,7 @@ class PolygonMixin(object):
                         hide_busy(busy)
                     self.warmed = True
                 if len(self.corners) == 4:
-                    print("  4 corners. Side 4: points on scan or right click = build.")
+                    print("  4 corners. Side 4: points on mesh or right click = build.")
                 continue
             return "exit"
 
@@ -7501,7 +7501,7 @@ class ScanMixin(object):
     def prep_front(self):
         """Thin parts are often scanned on both sides. Every clicked point hit a
         mesh face on the side you work on; its normal tells which side that is.
-        Scan samples are taken only from faces turned the same way as the
+        Mesh samples are taken only from faces turned the same way as the
         nearest clicked face, otherwise by a ray along that normal."""
         m = self.mesh
         try:
@@ -7530,7 +7530,7 @@ class ScanMixin(object):
         self.n_wall = 0
 
     def scan_side_sign(self, ns):
-        """+1 if the surface normal points to the side of the scan we work on
+        """+1 if the surface normal points to the side of the mesh we work on
         (normal of the nearest clicked face), else -1. Stored on the object so
         Smooth / Pull2Msh later sample the right side of a thin part."""
         u = ns.Domain(0).Mid; v = ns.Domain(1).Mid
@@ -7539,7 +7539,7 @@ class ScanMixin(object):
 
     def patch_sign(self, coons, ox):
         """+1/-1: how the patch parameter normal relates to the side you work
-        on, decided ONCE from all four corners (their clicked scan faces).
+        on, decided ONCE from all four corners (their clicked mesh faces).
         Per-sample 'nearest click' orientation fails on narrow fillets /
         blends, where the normal turns ~90 deg between the corners."""
         votes = 0.0
@@ -7556,7 +7556,7 @@ class ScanMixin(object):
         return -1.0 if votes < 0 else 1.0
 
     def ray_hit(self, o, d):
-        """First hit of the ray o + t*d on the scan -> (t, face index or None)."""
+        """First hit of the ray o + t*d on the mesh -> (t, face index or None)."""
         ray = rg.Ray3d(o, rg.Vector3d(d[0], d[1], d[2]))
         try:
             res = rg.Intersect.Intersection.MeshRay(self.mesh, ray)
@@ -7572,7 +7572,7 @@ class ScanMixin(object):
             return rg.Intersect.Intersection.MeshRay(self.mesh, ray), None
 
     def front_along(self, p, nref, min_dot, maxd):
-        """From p along +nref: first scan face turned like nref (skipping the
+        """From p along +nref: first mesh face turned like nref (skipping the
         back faces of a thin wall on the way), within maxd."""
         eps = 1e-6 * max(self.size, 1.0)
         o = rg.Point3d(p.X, p.Y, p.Z); gone = 0.0
@@ -7606,7 +7606,7 @@ class ScanMixin(object):
         return n.X * nref[0] + n.Y * nref[1] + n.Z * nref[2]
 
     def scan_pt(self, p, nsurf=None, fit=False):
-        """Scan point for p, ONLY from faces turned the same way as the patch.
+        """Mesh point for p, ONLY from faces turned the same way as the patch.
         nsurf : local patch normal (fit and start surface); otherwise the
                 normal of the nearest clicked point is used.
         fit   : during the fit nothing else is tried - an angled or opposite
@@ -7755,7 +7755,7 @@ class BuildMixin(object):
             len(self.patches) + 1,
             self.size_text(),
             fit_mode, "Auto spans" if auto else "Single",
-            ", ".join(desc) if desc else "all on scan"))
+            ", ".join(desc) if desc else "all on mesh"))
         self.warn_scan_sides(sides)
         fs = [s.fast for s in sides]
         coons = lambda u, v: coons_point(fs, u, v)
@@ -7779,7 +7779,7 @@ class BuildMixin(object):
             parts = []
             for k in ends:
                 if sides[k].kind == "edge": lab = SIDE_LV_NAME[self.raw_side_level(k)]
-                elif sides[k].kind == "scan": lab = "scan, {} later".format(LEVEL_NAME[self.level_for_side(k)])
+                elif sides[k].kind == "scan": lab = "mesh, {} later".format(LEVEL_NAME[self.level_for_side(k)])
                 else: lab = "curve"
                 parts.append("{}({})".format(self.side_rows(k), lab))
             return " + ".join(parts)
@@ -7791,7 +7791,7 @@ class BuildMixin(object):
                 lay = [self.layout_for_side(k_) if s_.kind == "edge" else 0 for k_, s_ in enumerate(sides)]
                 need = self.auto_cv(d, sides, lay, iso_lines, auto)[0]
                 if need > n:
-                    return need, why + ", raised to {} for the scan".format(need)
+                    return need, why + ", raised to {} for the mesh".format(need)
             return n, why
         nu, why_u = count(0, red)
         nv, why_v = count(1, blue)
@@ -7809,11 +7809,11 @@ class BuildMixin(object):
                 if k % 2 == 1 and s.along_deg > deg_v:
                     print("  [INFO] BLUE raised to {}CV to follow side {} exactly".format(s.along_deg + 1, k + 1)); deg_v = s.along_deg
         if auto and fit_mode == "NoScan":
-            print("  [INFO] SrfSplit=AutoSplit needs the scan - NoScan builds one patch")
+            print("  [INFO] SrfSplit=AutoSplit needs the mesh - NoScan builds one patch")
             auto = False
         if auto:
             tol = self.s_tol()
-            print("  AutoSplit, ScanTol={}. PINK direction:".format(fl(tol)))
+            print("  AutoSplit, MeshTol={}. PINK direction:".format(fl(tol)))
             su = auto_spans(iso_lines(0), max(deg_u, 1), tol, log=print) if deg_u >= 1 else 1
             print("  BLUE direction:")
             sv = auto_spans(iso_lines(1), max(deg_v, 1), tol, log=print) if deg_v >= 1 else 1
@@ -8006,12 +8006,12 @@ class BuildMixin(object):
             print("  Side {} mirror {}: off plane {:.5f}  normal tilt to plane {:.3f} deg".format(
                 k + 1, LEVEL_NAME[mirror_lv[k]], dmax, tilt))
         if getattr(self, "n_wall", 0):
-            print("  [INFO] scan faces turned away from the patch (walls, ribs, opposite side) were ignored ({} samples over all iterations)".format(self.n_wall))
+            print("  [INFO] mesh faces turned away from the patch (walls, ribs, opposite side) were ignored ({} samples over all iterations)".format(self.n_wall))
         if getattr(self, "n_back", 0):
-            print("  [INFO] {} scan samples hit the hidden (back) side - taken from the visible side instead".format(self.n_back))
+            print("  [INFO] {} mesh samples hit the hidden (back) side - taken from the visible side instead".format(self.n_back))
 
     def warn_scan_sides(self, sides):
-        """A side on the SCAN that runs right beside a neighbour's edge leaves
+        """A side on the MESH that runs right beside a neighbour's edge leaves
         a gap - say so (the corners were not both on that edge)."""
         for k, s_ in enumerate(sides):
             if s_.kind != "scan" or k in self.mirror_sides: continue
@@ -8020,7 +8020,7 @@ class BuildMixin(object):
                 if c.kind != "edge" or not c.near_bbox(T(mid), 5.0 * self.edge_snap_dist()): continue
                 ok, t = c.crv.ClosestPoint(mid)
                 if ok and c.crv.PointAt(t).DistanceTo(mid) < 5.0 * self.edge_snap_dist():
-                    print("  [WARN] side {} runs along a neighbour's edge but is fitted to the SCAN (its corners "
+                    print("  [WARN] side {} runs along a neighbour's edge but is fitted to the MESH (its corners "
                           "are not both on that edge) - expect a gap. UndoSrf and click both corners ON the edge "
                           "(yellow) or its end.".format(k + 1))
                     break
@@ -8052,7 +8052,7 @@ class BuildMixin(object):
                     got = deg + 1; break
             if got is None:
                 got = 6
-                print("  [INFO] {} direction: even 6CV is {:.3f} off the scan (ScanTol {:.3f}) - "
+                print("  [INFO] {} direction: even 6CV is {:.3f} off the mesh (MeshTol {:.3f}) - "
                       "smaller patch or SrfSplit=AutoSplit".format("PINK" if d == 0 else "BLUE", worst, tol))
             if got > req:
                 req = got; why.append("scan")
@@ -8062,7 +8062,7 @@ class BuildMixin(object):
 
     def curvature_tip(self, k, s, du, dv, P0, ox):
         """G2 forces this patch to START with the neighbour's curvature across
-        the edge. If the scan here is flatter, that becomes a visible bump."""
+        the edge. If the mesh here is flatter, that becomes a visible bump."""
         try:
             uvf, axis, sign = SIDE_MAP[k]
             pt, D1, D2, n = s.ev(0.5)[:4]
@@ -8076,7 +8076,7 @@ class BuildMixin(object):
             W = v_dist(srf_point(du, dv, P0, u, v), srf_point(du, dv, P0, uo, vo))
             bump = (abs(kn) - abs(ks)) * W * W / 12.0     # only when the neighbour is MORE curved
             if abs(kn) > 2.0 * abs(ks) and bump > max(0.2 * self.s_tol(), 0.05):
-                print("  [TIP] side {}: the neighbour is curved across the edge (R {:.0f}) and the scan here is "
+                print("  [TIP] side {}: the neighbour is curved across the edge (R {:.0f}) and the mesh here is "
                       "flatter (R {:.0f}). G2 makes this patch start with the neighbour's curvature -> expect a "
                       "bump of about {:.2f}. Better: build the FLATTER patch first and the curved one G2 to it "
                       "(the curvature then ramps inside the curved patch), or use G1 on this side.".format(
@@ -8174,7 +8174,7 @@ class BuildMixin(object):
         return P
 
     def freedom_report(self, du, dv, sides, levels, prob):
-        """How much of the patch the scan can still shape."""
+        """How much of the patch the mesh can still shape."""
         locked = set()
         nu, nv = du.n, dv.n
         for k, s in enumerate(sides):
@@ -8188,10 +8188,10 @@ class BuildMixin(object):
         free = nu * nv - len(locked)
         bulges = len(prob.conts)
         if prob.conts and free == 0:
-            print("  Scan can shape: 0 inner CV + {} bulge value(s). The patch is defined by its neighbours "
-                  "(class-A blend). If it is far from the scan: make the patch narrower or split it.".format(bulges))
+            print("  Mesh can shape: 0 inner CV + {} bulge value(s). The patch is defined by its neighbours "
+                  "(class-A blend). If it is far from the mesh: make the patch narrower or split it.".format(bulges))
         elif prob.conts:
-            print("  Scan can shape: {} inner CV + {} bulge value(s).".format(free, bulges))
+            print("  Mesh can shape: {} inner CV + {} bulge value(s).".format(free, bulges))
 
     def report(self, du, dv, P, ox, sides, prob, fit_mode, fit_pts):
         devs = []
@@ -8202,7 +8202,7 @@ class BuildMixin(object):
                     s = srf_point(du, dv, P, i / (n - 1.0), j / (n - 1.0))
                     q = self.scan_pt(rg.Point3d(s[0] + ox[0], s[1] + ox[1], s[2] + ox[2]))
                     if q is not None: devs.append(v_dist(s, v_sub(T(q), ox)))
-            label = "scan" if fit_mode == "Mesh" else "scan (NoScan - for information only)"
+            label = "scan" if fit_mode == "Mesh" else "mesh (NoScan - for information only)"
         else:
             for p in (fit_pts or []):
                 tp = v_sub(T(p), ox)
@@ -8277,7 +8277,7 @@ class SmoothMixin(object):
     def patch_quality(self, oid):
         """Numbers + green / yellow / red per patch button (cached until the
         next change). FairN waves, EvenUV spacing, StrUV kink, RelaxUV skew,
-        PullN scan deviation, MatchUVN seams open or below their G level."""
+        PullN mesh deviation, MatchUVN seams open or below their G level."""
         cache = self.__dict__.setdefault("qcache", {})
         if oid in cache: return cache[oid]
         res = None
@@ -8307,7 +8307,7 @@ class SmoothMixin(object):
                       "relax": quality_state("skew", q["skew"]),
                       "pull": "red" if dev > tolm else ("yellow" if dev > 0.5 * tolm else "green"),
                       "match": "red" if open_ else "green"}
-                txt = "this patch:  waves {} | spacing {:.1f}x | kink {:.0f} deg | skew {:.0f}% | scan {} | seams {}".format(
+                txt = "this patch:  waves {} | spacing {:.1f}x | kink {:.0f} deg | skew {:.0f}% | mesh {} | seams {}".format(
                     q["waves"], q["spacing"], q["kink"], q["skew"], fl(dev),
                     "{} not at their G (MatchUVN)".format(open_) if open_ else "ok")
                 res = {"state": st, "text": txt}
@@ -8427,7 +8427,7 @@ class SmoothMixin(object):
         """One Smooth or Pull2Msh step on patch oid. Same machinery for both
         (adjust_step): only the target for the patch itself differs. Direct
         neighbours change only their continuity rows, all seams are kept,
-        the scan leash is the same, UndoSrfEdit reverts either."""
+        the mesh leash is the same, UndoSrfEdit reverts either."""
         if mode in ("even", "straight", "relax", "todev"):
             return self.layout_patch(oid, mode)
         if mode == "match":
@@ -8453,7 +8453,7 @@ class SmoothMixin(object):
                 # StrUV / RelaxUV stays; neighbours give way with their rows
                 data = self.scan_samples(A, A.P, ox)
                 if len(data) < A.n():
-                    print(tag + " too little scan under this patch ({} samples). Nothing changed.".format(len(data)))
+                    print(tag + " too little mesh under this patch ({} samples). Nothing changed.".format(len(data)))
                     return
                 data_fn = None
                 target = normal_only(scan_target(data, 1.0))
@@ -8464,7 +8464,7 @@ class SmoothMixin(object):
                                                 self.mirror_spec(ox), None, None, None, keep_levels)
                 if not A.move:
                     return None
-                # leash: scan deviation may not grow above max(ScanTol, before).
+                # leash: scan deviation may not grow above max(MeshTol, before).
                 # PullN: only for the pulled patch - the neighbours may give way
                 old = dict((p.key, list(p.P)) for p in moving)
                 free_keys = set()                         # NoScan patches: no scan leash
@@ -8513,14 +8513,14 @@ class SmoothMixin(object):
                   "MatchUVN on the narrow patch rebuilds it")
         nb = [p for p in moving if p is not A]
         print("{} {} neighbour(s) adjusted (only their continuity rows){}".format(
-            tag, len(nb), "" if alpha == 1.0 else ", step reduced to {:.0%} by the scan leash".format(alpha)))
+            tag, len(nb), "" if alpha == 1.0 else ", step reduced to {:.0%} by the mesh leash".format(alpha)))
         for sm in used:
             print("    seam kept {}".format(LEVEL_NAME.get(sm["level"], "?")))
-        print("    scan deviation of this patch (max): {} -> {} (ScanTol {})".format(
+        print("    mesh deviation of this patch (max): {} -> {} (MeshTol {})".format(
             fl(before[A.key]), fl(after[A.key]), fl(self.s_tol())))
         for p in nb:
             if after[p.key] > before[p.key] + 1e-4:
-                print("    neighbour gave way: its scan deviation {} -> {}{}".format(
+                print("    neighbour gave way: its mesh deviation {} -> {}{}".format(
                     fl(before[p.key]), fl(after[p.key]), "  (pull it too if that is too much)" if after[p.key] > self.s_tol() else ""))
         if freeze:
             print("    rows next to trimmed / multi-span surfaces were kept as they are")
@@ -8595,7 +8595,7 @@ class SmoothMixin(object):
     def enter_match(self, oid):
         """Seam bubbles on every side of the patch where a neighbour is (also
         if hand edits opened the seam); click a bubble = G0 -> G1 -> G2, then
-        Apply. The patch stays, the neighbours come to it. No scan."""
+        Apply. The patch stays, the neighbours come to it. No mesh."""
         tag = "[MatchUVN]"
         got = self.load_patches(oid, tag)
         if got is None: return
@@ -8764,9 +8764,9 @@ class SmoothMixin(object):
     # ---- FreeEdgeEdt: redraw a free edge of a finished patch ------------------
     def enter_edge(self, oid):
         """1. click the free edge to change (the nearest one lights up);
-        2a. start AT one of its corners, points on the scan, end AT the other
+        2a. start AT one of its corners, points on the mesh, end AT the other
             corner: only the middle of the edge moves, the corners stay;
-        2b. start BESIDE the patch: points on the scan along where the edge
+        2b. start BESIDE the patch: points on the mesh along where the edge
             should be, right click / Enter: the WHOLE edge (corners too) goes
             onto that line; the patch follows near the edge, neighbours at
             its corners come along and keep their G0/G1/G2."""
@@ -8953,7 +8953,7 @@ class SmoothMixin(object):
 
     def layout_patch(self, oid, mode):
         """Even / Straight / ToDev: CVs move along the surface, the shape stays
-        (<= 0.3 ScanTol). Rows crossing a seam take the neighbour's matching
+        (<= 0.3 MeshTol). Rows crossing a seam take the neighbour's matching
         rows along; seams are made exact again (same G as before)."""
         tag = {"even": "[EvenUV]", "straight": "[StrUV]", "relax": "[RelaxUV]", "todev": "[ToDevUV]"}[mode]
         got = self.load_patches(oid, tag)
@@ -8968,7 +8968,7 @@ class SmoothMixin(object):
             finally:
                 self.refs = saved_refs
             if len(data) < A.n():
-                print(tag + " too little scan under this patch. Nothing changed."); return
+                print(tag + " too little mesh under this patch. Nothing changed."); return
             devs = [(u, v, v_dist(srf_point(A.du, A.dv, A.P, u, v), q)) for (u, v, q) in data]
         old = dict((p.key, list(p.P)) for p in allp)
         new, txt, moved = layout_step(A, allp, mode, self.seam_tol(tol), freeze, devs, 0.3 * self.s_tol(),
@@ -9076,7 +9076,7 @@ class SmoothMixin(object):
         return alpha
 
     def side_sign(self, p, P, ox):
-        """Orientation of patch p's normal towards the scan side we work on:
+        """Orientation of patch p's normal towards the mesh side we work on:
         stored at build; otherwise majority of the nearest faces."""
         try:
             s = rs.GetUserText(p.key, "msh2classA_side")
@@ -9095,9 +9095,9 @@ class SmoothMixin(object):
 
     def reset_patch(self, oid):
         """RstN: the patch as smooth as its edges allow - CVs only along the
-        normal, the scan and the TempPoints NOT used; the rows that hold its
+        normal, the mesh and the TempPoints NOT used; the rows that hold its
         seams (G0 / G1 / G2) stay, the neighbours keep their seams. Then
-        PullN brings it to the scan / its TempPoints."""
+        PullN brings it to the mesh / its TempPoints."""
         tag = "[RstN]"
         got = self.load_patches(oid, tag)
         if got is None: return
@@ -9141,8 +9141,8 @@ class SmoothMixin(object):
         return cache[oid]
 
     def scan_samples(self, p, P, ox, n=None):
-        """[(u, v, scan point - ox)] under patch p, visible side only. A patch
-        built through TempPoints: its points instead of the scan."""
+        """[(u, v, mesh point - ox)] under patch p, visible side only. A patch
+        built through TempPoints: its points instead of the mesh."""
         pts = self.patch_points(p.key)
         if pts:
             out = []
@@ -9165,7 +9165,7 @@ class SmoothMixin(object):
         return out
 
     def patch_dev(self, p, P, ox):
-        """Max distance of patch p (CVs P, centred by ox) to the scan."""
+        """Max distance of patch p (CVs P, centred by ox) to the mesh."""
         dmax = 0.0
         for (u, v, q) in self.scan_samples(p, P, ox, 9):
             dmax = max(dmax, v_dist(srf_point(p.du, p.dv, P, u, v), q))
@@ -10115,7 +10115,7 @@ class SmoothMixin(object):
                 pass
 
 class Session(SettingsMixin, ScanMixin, PolygonMixin, DrawMixin, BuildMixin, SmoothMixin, ViewMixin):
-    """One msh2classA run: the scan stays loaded, patches are added one by one."""
+    """One msh2classA run: the mesh stays loaded, patches are added one by one."""
 
     def __init__(self, mesh):
         self.mesh = mesh
@@ -11338,7 +11338,7 @@ def fit_npatch(bpts, bnorm, inner=(), deg=5, margin=0.01, w_tan=3.0, w_fair=None
     hole, its CV grid lined up with the hole's main direction and only a
     little bigger than the hole. Least squares: through the boundary points
     bpts, tangent to the neighbours (S_u . n = S_v . n = 0 with their normals
-    bnorm), through the scan points inner, and as little bending as possible
+    bnorm), through the mesh points inner, and as little bending as possible
     (thin plate) - that keeps the CV net even. -> (SPatch, (c, ex, ey, N, x0, x1, y0, y1))."""
     c, ex, ey, N = frame or npatch_frame(bpts)
     xs = [_dot(_sub(q, c), ex) for q in bpts]; ys = [_dot(_sub(q, c), ey) for q in bpts]
@@ -11888,7 +11888,7 @@ def main():
     while True:
         mesh = get_scan(preset)
         if mesh is None: break
-        busy = show_busy("Preparing scan...")
+        busy = show_busy("Preparing mesh...")
         try:
             check_esc()
         except UserAbort:
@@ -11937,7 +11937,7 @@ def main():
             break
         run_scan_tool(tool)                      # the scans may have moved: the scan is read again
         preset = session.scan_id; carry = session.patches
-        print("[{}] done - back to the patches (scan read again where it is now)".format(tool))
+        print("[{}] done - back to the patches (mesh read again where it is now)".format(tool))
     print("\n{} finished: {} patch(es) created.".format(VERSION, n_total))
 
 
