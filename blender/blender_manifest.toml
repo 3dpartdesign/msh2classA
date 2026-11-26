@@ -1,0 +1,18 @@
+schema_version = "1.0.0"
+
+id = "msh2classA"
+version = "0.1.1-alpha"
+name = "msh2classA (experimental)"
+tagline = "Scans and AI meshes to Class-A NURBS patches - experimental"
+maintainer = "Marcin Bartoszewski <info@3dPARTdesign.com>"
+type = "add-on"
+website = "https://3dPARTdesign.com"
+tags = ["Modeling", "Mesh", "Import-Export"]
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:GPL-3.0-only"]
+copyright = ["2026 Marcin Bartoszewski, trading as 3dPARTdesign"]
+
+[permissions]
+files = "Reads scan meshes, writes IGES and scan_setups.json"
