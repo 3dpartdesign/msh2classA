@@ -9,9 +9,9 @@
 # -----------------------------------------------------------------------------
 
 # (key, label, sticky default). Zebra / EMap / CV only on surfaces, Scan = the mesh.
-VIEW_BTN = (("legend", "Legend", True), ("showcv", "CV pts", False), ("zebra", "Zebra", False),
+VIEW_BTN = (("legend", "Legend", False), ("showcv", "CV pts", False), ("zebra", "Zebra", False),
             ("emap", "EMap", False), ("graph", "Graph", False), ("deviation", "Deviation", False),
-            ("scanvis", "Scan", True), ("mirrorview", "Mirror", False),
+            ("scanvis", "Scan/mesh", True), ("mirrorview", "Mirror", False),
             ("labels", "Labels", True))      # = SeamLabels: the CV-count and continuity bubbles of the patches
 
 
@@ -190,7 +190,7 @@ class ViewMixin(object):
             if sid is not None:
                 if self.scan_visible: sc.doc.Objects.Show(sid, True)
                 else: sc.doc.Objects.Hide(sid, True)
-            print("  Mesh {} (points still snap onto it)".format("shown" if self.scan_visible else "hidden"))
+            print("  Scan/mesh {} (points still snap onto it)".format("shown" if self.scan_visible else "hidden"))
         elif key == "mirrorview":
             if MIRROR_AXIS.get(self.s_mirror()) is None:
                 print("  Mirror view: set MirrorPlane first (XZ / YZ / XY)")

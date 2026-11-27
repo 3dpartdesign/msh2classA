@@ -53,10 +53,10 @@ def mesh_of(obj, reload=False):
     if reload or obj.Name not in _MESH:
         path = obj.File
         if not path or not os.path.isfile(path):
-            App.Console.PrintWarning("[msh2classA] scan file not found: {}\n".format(path))
+            App.Console.PrintWarning("[msh2classA] scan/mesh file not found: {}\n".format(path))
             _MESH[obj.Name] = ([], [])
         else:
-            _MESH[obj.Name] = read_scan(path, float(obj.ScanMM))     # FreeCAD works in mm
+            _MESH[obj.Name] = read_scan(path, float(obj.ScanMM) * scan_scale(obj))   # FreeCAD works in mm
             if obj.Sha256 and m2setups.file_sha256(path) != obj.Sha256:
                 App.Console.PrintWarning("[msh2classA] WARNING: {} CHANGED since it was loaded (SHA-256 "
                                          "differs)\n".format(os.path.basename(path)))
@@ -64,26 +64,41 @@ def mesh_of(obj, reload=False):
     return _MESH[obj.Name]
 
 
+def scan_scale(obj):
+    """The uniform SIZE of the scan/mesh (Align Scale / MeshScale in Rhino):
+    a FreeCAD Placement cannot scale, so it lives here and in the mesh."""
+    return float(getattr(obj, "ScanScale", 1.0) or 1.0)
+
+
+def _ensure_scale_prop(obj):
+    if not hasattr(obj, "ScanScale"):
+        obj.addProperty("App::PropertyFloat", "ScanScale", "Scan",
+                        "Uniform size of the scan/mesh (AI / photogrammetry meshes scaled in a setup)")
+        obj.ScanScale = 1.0
+
+
 class ScanRef(object):
     M2CA_SCAN = True
 
     def __init__(self, obj):
         obj.Proxy = self
-        obj.addProperty("App::PropertyString", "File", "Scan", "Scan file (only read, never written)")
-        obj.addProperty("App::PropertyString", "Sha256", "Scan", "SHA-256 of the scan file when it was loaded")
-        obj.addProperty("App::PropertyFloat", "ScanMM", "Scan", "mm per unit of the scan file")
-        obj.addProperty("App::PropertyPlacement", "Placement", "Base", "Position of the scan")
+        obj.addProperty("App::PropertyString", "File", "Scan", "Scan/mesh file (only read, never written)")
+        obj.addProperty("App::PropertyString", "Sha256", "Scan", "SHA-256 of the scan/mesh file when it was loaded")
+        obj.addProperty("App::PropertyFloat", "ScanMM", "Scan", "mm per unit of the scan/mesh file")
+        obj.addProperty("App::PropertyPlacement", "Placement", "Base", "Position of the scan/mesh")
         obj.ScanMM = 1.0
+        _ensure_scale_prop(obj)
         for p in ("File", "Sha256"):
             obj.setEditorMode(p, 1)                 # read only in the property view
 
     def onDocumentRestored(self, obj):
+        _ensure_scale_prop(obj)
         mesh_of(obj, reload=True)
 
     def onChanged(self, obj, prop):
-        if prop in ("File", "ScanMM"):
+        if prop in ("File", "ScanMM", "ScanScale"):
             _MESH.pop(getattr(obj, "Name", ""), None)
-        if prop in ("File", "ScanMM", "Placement"):
+        if prop in ("File", "ScanMM", "ScanScale", "Placement"):
             _TREE.clear()
 
     def execute(self, obj):
@@ -139,7 +154,7 @@ class ViewProviderScanRef(object):
     def updateData(self, fp, prop):
         if prop == "Placement":
             self.place()
-        elif prop in ("File", "ScanMM"):
+        elif prop in ("File", "ScanMM", "ScanScale"):
             self.refresh()
 
     def getDisplayModes(self, vobj):
@@ -183,7 +198,7 @@ def add_scan(doc, path, scan_mm=1.0):
 
 def world_mesh(objs):
     """One TriMesh of the scans in world coordinates (cached)."""
-    key = tuple((o.Name, o.File, float(o.ScanMM), tuple(o.Placement.toMatrix().A)) for o in objs)
+    key = tuple((o.Name, o.File, float(o.ScanMM), scan_scale(o), tuple(o.Placement.toMatrix().A)) for o in objs)
     if _TREE.get("key") != key:
         V, T = [], []
         for o in objs:
@@ -207,7 +222,6 @@ def apply_setup(doc, name, log=App.Console.PrintMessage):
     st = data.get(name)
     if not st:
         log("[msh2classA] no setup '{}'\n".format(name)); return 0
-    want_mm = m2setups.unit_mm(st.get("_units"))
     n = 0; ref = None; missing = []
     for o in objs:
         rec = m2setups.find_record(st, o.File)
@@ -216,10 +230,16 @@ def apply_setup(doc, name, log=App.Console.PrintMessage):
         w = m2setups.check_file(rec, o.File)
         if w:
             App.Console.PrintWarning("[msh2classA] " + w + "\n")
-        if abs(float(o.ScanMM) - want_mm) > 1e-12:
-            o.ScanMM = want_mm
-        m = m2setups.scaled_matrix(rec, st, 1.0)          # FreeCAD: mm
+        m = list(m2setups.scaled_matrix(rec, st, 1.0))    # FreeCAD: mm
+        det = (m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8]) +
+               m[2] * (m[4] * m[9] - m[5] * m[8]))
+        s_ = abs(det) ** (1.0 / 3.0) if det else 1.0       # a size in the setup (AI mesh): ScanScale
+        for i in (0, 1, 2, 4, 5, 6, 8, 9, 10):
+            m[i] /= s_
         new = App.Placement(App.Matrix(*m))
+        _ensure_scale_prop(o)
+        if abs(scan_scale(o) - s_) > 1e-12:
+            o.ScanScale = s_
         if ref is None:
             ref = new.multiply(o.Placement.inverse())
         o.Placement = new
@@ -228,7 +248,7 @@ def apply_setup(doc, name, log=App.Console.PrintMessage):
         if ref is not None:
             o.Placement = ref.multiply(o.Placement)
     _TREE.clear()
-    log("[msh2classA] setup '{}' applied to {} scan(s)\n".format(name, n))
+    log("[msh2classA] setup '{}' applied to {} scan(s)/mesh(es)\n".format(name, n))
     return n
 
 
@@ -236,13 +256,14 @@ def save_setup(doc, name, log=App.Console.PrintMessage):
     objs = scan_objects(doc)
     if not objs:
         return []
-    scan_mm = float(objs[0].ScanMM)
-    unit = [k for k, v in m2setups.UNIT_MM.items() if abs(v - scan_mm) < 1e-12]
-    units = unit[0] if unit else "mm"
-    f = 1.0 / m2setups.unit_mm(units)
+    units = "mm"                                     # FreeCAD works in mm
+    f = 1.0
     recs = []
     for o in objs:
         m = list(o.Placement.toMatrix().A)
+        s_ = scan_scale(o)
+        for i in (0, 1, 2, 4, 5, 6, 8, 9, 10):
+            m[i] *= s_                               # the size back into the 4x4
         for i in (3, 7, 11):
             m[i] *= f
         recs.append((o.File, m, None))

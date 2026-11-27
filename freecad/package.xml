@@ -2,7 +2,7 @@
 <package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
   <name>msh2classA</name>
   <description>Scans and AI meshes to Class-A NURBS patches. EXPERIMENTAL - NOT TESTED YET.</description>
-  <version>0.1.1</version>
+  <version>0.1.2</version>
   <date>2026-11-26</date>
   <maintainer email="info@3dPARTdesign.com">Marcin Bartoszewski</maintainer>
   <license file="LICENSE">GPL-3.0-only</license>

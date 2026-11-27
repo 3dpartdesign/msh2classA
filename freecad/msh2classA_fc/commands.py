@@ -47,12 +47,12 @@ class _Cmd(object):
 
 class LoadScans(_Cmd):
     NAME = "M2CA_LoadScans"
-    TEXT = "Load scans"
-    TIP = "Link scan meshes (STL / OBJ / PLY). The files are only read and never saved into the .FCStd"
+    TEXT = "Load scans/meshes"
+    TIP = "Link scans/meshes (STL / OBJ / PLY). The files are only read and never saved into the .FCStd"
 
     def Activated(self):
         QtCore, QtGui = _qt()
-        res = QtGui.QFileDialog.getOpenFileNames(None, "msh2classA - load scans", "", "Meshes (*.stl *.obj *.ply)")
+        res = QtGui.QFileDialog.getOpenFileNames(None, "msh2classA - load scans/meshes", "", "Scans/meshes (*.stl *.obj *.ply)")
         files = res[0] if isinstance(res, tuple) else res
         if not files:
             return
@@ -65,20 +65,20 @@ class LoadScans(_Cmd):
                 App.Console.PrintError("[msh2classA] {}: {}\n".format(f, e))
         doc.recompute()
         Gui.SendMsgToActiveView("ViewFit")
-        _msg("[msh2classA] {} scan(s) linked (files untouched)".format(len(files)))
+        _msg("[msh2classA] {} scan(s)/mesh(es) linked (files untouched)".format(len(files)))
 
 
 class ApplySetup(_Cmd):
     NAME = "M2CA_ApplySetup"
     TEXT = "Apply setup"
-    TIP = "Put the scans where a saved setup has them (scan_setups.json next to the scans, the same file Rhino uses)"
+    TIP = "Put the scans/meshes where a saved setup has them (scan_setups.json next to the scans/meshes, the same file Rhino uses)"
 
     def Activated(self):
         QtCore, QtGui = _qt()
         doc = _doc()
         names = scanref.setup_names(doc)
         if not names:
-            QtGui.QMessageBox.information(None, "msh2classA", "No setups next to the loaded scans.")
+            QtGui.QMessageBox.information(None, "msh2classA", "No setups next to the loaded scans/meshes.")
             return
         name, ok = QtGui.QInputDialog.getItem(None, "msh2classA", "Setup:", names, 0, False)
         if ok and name:
@@ -89,7 +89,7 @@ class ApplySetup(_Cmd):
 class SaveSetup(_Cmd):
     NAME = "M2CA_SaveSetup"
     TEXT = "Save setup"
-    TIP = "Save the present scan positions under a name (scan_setups.json next to the scans)"
+    TIP = "Save the present scan/mesh positions under a name (scan_setups.json next to the scans/meshes)"
 
     def Activated(self):
         QtCore, QtGui = _qt()
@@ -100,8 +100,8 @@ class SaveSetup(_Cmd):
 
 class CheckScans(_Cmd):
     NAME = "M2CA_CheckScans"
-    TEXT = "Check scan files"
-    TIP = "Are the scan files still the ones you loaded? (SHA-256)"
+    TEXT = "Check scan/mesh files"
+    TIP = "Are the scan/mesh files still the ones you loaded? (SHA-256)"
 
     def Activated(self):
         from .core import setups as m2setups
@@ -114,13 +114,13 @@ class CheckScans(_Cmd):
                 bad.append(os.path.basename(o.File) + " (missing)")
         QtCore, QtGui = _qt()
         QtGui.QMessageBox.information(None, "msh2classA", "CHANGED since loaded: " + ", ".join(bad) if bad
-                                      else "All scan files unchanged.")
+                                      else "All scan/mesh files unchanged.")
 
 
 class Settings(_Cmd):
     NAME = "M2CA_Settings"
     TEXT = "Settings"
-    TIP = "Continuity of new sides, mesh tolerance, snap distance, scan units"
+    TIP = "Continuity of new sides, scan/mesh tolerance, snap distance, scan/mesh units"
 
     def Activated(self):
         QtCore, QtGui = _qt()
@@ -131,7 +131,7 @@ class Settings(_Cmd):
         if not ok:
             return
         p.SetInt("Cont", items.index(c))
-        t, ok = QtGui.QInputDialog.getDouble(None, "msh2classA", "Mesh tolerance (mm):", p.GetFloat("TolMM", 0.5),
+        t, ok = QtGui.QInputDialog.getDouble(None, "msh2classA", "Scan/mesh tolerance (mm):", p.GetFloat("TolMM", 0.5),
                                              0.001, 100.0, 3)
         if ok:
             p.SetFloat("TolMM", t)
@@ -139,7 +139,7 @@ class Settings(_Cmd):
                                              p.GetFloat("SnapMM", 2.0), 0.0, 100.0, 3)
         if ok:
             p.SetFloat("SnapMM", s)
-        u, ok = QtGui.QInputDialog.getDouble(None, "msh2classA", "Scan file units (mm per unit):",
+        u, ok = QtGui.QInputDialog.getDouble(None, "msh2classA", "Scan/mesh file units (mm per unit):",
                                              p.GetFloat("ScanMM", 1.0), 1e-6, 1e6, 6)
         if ok:
             p.SetFloat("ScanMM", u)
@@ -153,7 +153,7 @@ class _PickSession(object):
         self.doc = _doc()
         self.view = Gui.ActiveDocument.ActiveView
         scans = scanref.scan_objects(self.doc, visible_only=True)
-        _msg("[msh2classA] preparing the scan for picking (large scans take a while) ...")
+        _msg("[msh2classA] preparing the scan/mesh for picking (large scans/meshes take a while) ...")
         self.mesh = scanref.world_mesh(scans)
         self.pts = []
         self.root = coin.SoSeparator()
@@ -170,7 +170,7 @@ class _PickSession(object):
         self.prompt()
 
     def prompt(self):
-        _msg("[msh2classA] click corner {} of 4 on the scan   (Backspace = undo point, Esc / right click = "
+        _msg("[msh2classA] click corner {} of 4 on the scan/mesh   (Backspace = undo point, Esc / right click = "
              "finish)".format(len(self.pts) + 1))
 
     def redraw(self):
@@ -188,7 +188,7 @@ class _PickSession(object):
             return
         hit = self.view.getObjectInfo(info["Position"])
         if not hit:
-            _msg("[msh2classA] nothing under the mouse - click ON the scan")
+            _msg("[msh2classA] nothing under the mouse - click ON the scan/mesh")
             return
         self.pts.append((hit["x"], hit["y"], hit["z"]))
         self.redraw()
@@ -240,13 +240,13 @@ class _PickSession(object):
 class NewPatch(_Cmd):
     NAME = "M2CA_NewPatch"
     TEXT = "New patch"
-    TIP = "Click 4 corners on the scan: a single-span patch, G0/G1/G2 to the patches it touches"
+    TIP = "Click 4 corners on the scan/mesh: a single-span patch, G0/G1/G2 to the patches it touches"
 
     def Activated(self):
         doc = _doc()
         if not scanref.scan_objects(doc, visible_only=True):
             QtCore, QtGui = _qt()
-            QtGui.QMessageBox.information(None, "msh2classA", "Load a scan first.")
+            QtGui.QMessageBox.information(None, "msh2classA", "Load a scan/mesh first.")
             return
         _PickSession()
 

@@ -42,6 +42,79 @@ def _mm_per_unit():
         return 1.0
 
 
+# ---- units: the same rules in Rhino, Blender and FreeCAD -------------------
+# Scan FILES are in ScanMeshUnits (default mm - what scanners write). Every program
+# converts them to its own units. scan_setups.json says its units ("_units",
+# "_mm_per_unit"); a setup without them (older files) is taken as mm.
+UNIT_NAMES = (("Millimeters", "mm"), ("Centimeters", "cm"), ("Meters", "m"), ("Inches", "in"), ("Feet", "ft"))
+UNIT_MM = {"mm": 1.0, "cm": 10.0, "m": 1000.0, "in": 25.4, "inch": 25.4, "ft": 304.8, "um": 0.001}
+SCAN_UNIT_CHOICES = ("mm", "cm", "m", "in", "ft")
+
+
+def doc_unit_name():
+    s = str(sc.doc.ModelUnitSystem)
+    for a, b in UNIT_NAMES:
+        if s == a: return b
+    return "custom"
+
+
+def scan_mm():
+    """mm per unit of the scan FILES (option ScanMeshUnits, default mm)."""
+    return UNIT_MM.get(str(sc.sticky.get("M2CA_scan_units", "mm")), 1.0)
+
+
+def setup_mm(st):
+    """mm per unit of a setup's matrices (older setups without units: mm)."""
+    try:
+        v = st.get("_mm_per_unit")
+        if v: return float(v)
+    except Exception:
+        pass
+    return UNIT_MM.get(str(st.get("_units") or "mm").lower(), 1.0)
+
+
+def xf_from_setup(m, st):
+    """Setup matrix (16 numbers, the setup's units) -> Transform in document units."""
+    X = rg.Transform(1.0)
+    for i in range(4):
+        for j in range(4):
+            X[i, j] = m[i * 4 + j]
+    f = setup_mm(st) / _mm_per_unit()
+    for i in range(3):
+        X[i, 3] = X[i, 3] * f
+    return X
+
+
+def xf_to_setup(X, st):
+    """Transform in document units -> 16 numbers in the setup's units."""
+    f = _mm_per_unit() / setup_mm(st)
+    m = [X[i, j] for i in range(4) for j in range(4)]
+    for i in (3, 7, 11):
+        m[i] = m[i] * f
+    return m
+
+
+_HASHES = {}
+
+
+def file_sha256(path):
+    """SHA-256 of a file, remembered while size and time stay the same."""
+    import hashlib
+    try:
+        key = (path, os.path.getsize(path), os.path.getmtime(path))
+    except Exception:
+        return None
+    if key in _HASHES: return _HASHES[key]
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(1 << 20)
+            if not b: break
+            h.update(b)
+    _HASHES[key] = h.hexdigest()
+    return _HASHES[key]
+
+
 def opt_get(key, default):
     v = sc.sticky.get("M2CA_" + key, None)
     if v is None: return default
@@ -107,9 +180,12 @@ def check_esc():
         _ESC[0] = False
         raise UserAbort()
 
-def show_busy(msg="Working..."):
+def show_busy(msg="Working...", esc=None):
+    """Busy note in the command line and the view. esc: what Esc stops HERE
+    (e.g. "end msh2classA", "cancel Align") - only where the code checks it;
+    None = Esc does nothing here, 'please wait' is shown."""
     _ESC[0] = False
-    msg = msg + "   (Esc = stop)"
+    msg = msg + ("   (Esc = {})".format(esc) if esc else "   (please wait)")
     try:
         Rhino.RhinoApp.SetCommandPrompt(msg)
     except Exception: pass

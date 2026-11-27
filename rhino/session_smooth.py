@@ -69,7 +69,7 @@ class SmoothMixin(object):
                       "relax": quality_state("skew", q["skew"]),
                       "pull": "red" if dev > tolm else ("yellow" if dev > 0.5 * tolm else "green"),
                       "match": "red" if open_ else "green"}
-                txt = "this patch:  waves {} | spacing {:.1f}x | kink {:.0f} deg | skew {:.0f}% | mesh {} | seams {}".format(
+                txt = "this patch:  waves {} | spacing {:.1f}x | kink {:.0f} deg | skew {:.0f}% | scan/mesh {} | seams {}".format(
                     q["waves"], q["spacing"], q["kink"], q["skew"], fl(dev),
                     "{} not at their G (MatchUVN)".format(open_) if open_ else "ok")
                 res = {"state": st, "text": txt}
@@ -215,7 +215,7 @@ class SmoothMixin(object):
                 # StrUV / RelaxUV stays; neighbours give way with their rows
                 data = self.scan_samples(A, A.P, ox)
                 if len(data) < A.n():
-                    print(tag + " too little mesh under this patch ({} samples). Nothing changed.".format(len(data)))
+                    print(tag + " too little scan/mesh under this patch ({} samples). Nothing changed.".format(len(data)))
                     return
                 data_fn = None
                 target = normal_only(scan_target(data, 1.0))
@@ -275,14 +275,14 @@ class SmoothMixin(object):
                   "MatchUVN on the narrow patch rebuilds it")
         nb = [p for p in moving if p is not A]
         print("{} {} neighbour(s) adjusted (only their continuity rows){}".format(
-            tag, len(nb), "" if alpha == 1.0 else ", step reduced to {:.0%} by the mesh leash".format(alpha)))
+            tag, len(nb), "" if alpha == 1.0 else ", step reduced to {:.0%} by the scan/mesh leash".format(alpha)))
         for sm in used:
             print("    seam kept {}".format(LEVEL_NAME.get(sm["level"], "?")))
-        print("    mesh deviation of this patch (max): {} -> {} (MeshTol {})".format(
+        print("    scan/mesh deviation of this patch (max): {} -> {} (MeshTol {})".format(
             fl(before[A.key]), fl(after[A.key]), fl(self.s_tol())))
         for p in nb:
             if after[p.key] > before[p.key] + 1e-4:
-                print("    neighbour gave way: its mesh deviation {} -> {}{}".format(
+                print("    neighbour gave way: its scan/mesh deviation {} -> {}{}".format(
                     fl(before[p.key]), fl(after[p.key]), "  (pull it too if that is too much)" if after[p.key] > self.s_tol() else ""))
         if freeze:
             print("    rows next to trimmed / multi-span surfaces were kept as they are")
@@ -470,7 +470,7 @@ class SmoothMixin(object):
         hit = self._match_under(m, sx, sy)
         mm = self.match_mode
         if hit is None:
-            print("  [MatchUVN] click a seam bubble, Apply or Cancel (right click / Esc = cancel; the patch "
+            print("  [MatchUVN] click a seam bubble, Apply or Cancel (right click / Esc = cancel MatchUVN; the patch "
                   "buttons are hidden while MatchUVN is open)"); return
         kind, n = hit
         if kind == "seam":
@@ -730,7 +730,7 @@ class SmoothMixin(object):
             finally:
                 self.refs = saved_refs
             if len(data) < A.n():
-                print(tag + " too little mesh under this patch. Nothing changed."); return
+                print(tag + " too little scan/mesh under this patch. Nothing changed."); return
             devs = [(u, v, v_dist(srf_point(A.du, A.dv, A.P, u, v), q)) for (u, v, q) in data]
         old = dict((p.key, list(p.P)) for p in allp)
         new, txt, moved = layout_step(A, allp, mode, self.seam_tol(tol), freeze, devs, 0.3 * self.s_tol(),
@@ -1232,7 +1232,7 @@ class SmoothMixin(object):
                 if res is None:
                     print("[Fillet] " + why)
                 go = Rhino.Input.Custom.GetOption()
-                go.SetCommandPrompt("Fillet R {}{} {}{} <right click = apply, Esc = back>".format(
+                go.SetCommandPrompt("Fillet R {}{} {}{} <right click = apply, Esc = back to the corners>".format(
                     fl(R0), "" if R1 is None else "-" + fl(R1), LEVEL_NAME.get(level, "G2"),
                     "" if res is None else ", {} pieces".format(len(res["pieces"]))))
                 oR = Rhino.Input.Custom.OptionDouble(R0, 1e-6, 1e9)

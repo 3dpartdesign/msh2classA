@@ -31,9 +31,14 @@ def take_pending_tool():
     return nm
 
 
-def run_scan_tool(nm):
+def run_scan_tool(nm, note=""):
     fn = dict(SCAN_TOOLS).get(nm)
     if fn is None: return
+    if nm != "MeshMirror":
+        print("")
+        print("-" * 64)
+        print("-  SCAN/MESH TOOL: {}{}".format(SCAN_TOOL_LABEL.get(nm, nm), "   ({})".format(note) if note else ""))
+        print("-" * 64)
     try:
         fn()
     except UserAbort:
@@ -41,6 +46,7 @@ def run_scan_tool(nm):
     except Exception:
         print("[{}] failed:".format(nm)); print(traceback.format_exc())
     finally:
+        _ScanDraw.off_all()                 # never leave a tool's drawing on
         _MIRROR_HIDE[0] = False; sc.doc.Views.Redraw()
         _ESC[0] = False                     # an Esc inside the tool ends the tool, not the plugin
 
@@ -77,7 +83,7 @@ def surface_tool_buttons(ef, lay):
 def scan_tool_buttons(ef, lay):
     """The 'Meshes' group of the panel: one button per mesh tool."""
     try:
-        lb = ef.Label(); lb.Text = "Meshes"
+        lb = ef.Label(); lb.Text = "Scans/meshes"
         lay.AddRow(lb)
     except Exception:
         pass
@@ -188,8 +194,9 @@ def cad_services_button(ef, lay):
         pass
 
 
-def open_scan_panel():
-    """Small panel with the mesh tools while you pick the mesh."""
+def open_scan_panel(start_label=None):
+    """Small panel with the mesh tools while you pick the mesh; on top the
+    button that starts (or goes back to) the patches."""
     try:
         import Eto.Forms as ef
         import Eto.Drawing as ed
@@ -204,6 +211,14 @@ def open_scan_panel():
             try: f.Topmost = True
             except Exception: pass
         lay = ef.DynamicLayout(); lay.Padding = ed.Padding(4); lay.Spacing = ed.Size(2, 2)
+        if start_label:
+            bs = ef.Button(); bs.Text = start_label
+            try: bs.Font = ed.Font(bs.Font.Family, bs.Font.Size + 2, ed.FontStyle.Bold)
+            except Exception: pass
+            bs.Click += lambda sender, e: post_scan_tool("DrawPatches")
+            lay.AddRow(bs)
+            sp = ef.Label(); sp.Text = " "
+            lay.AddRow(sp)
         scan_tool_buttons(ef, lay)
         cad_services_button(ef, lay)
         f.Content = lay
@@ -230,17 +245,45 @@ def close_scan_panel(f):
     except Exception: pass
 
 
+def _patch_target(preset_id):
+    """The scan/mesh to draw the patches on: the one of the patches you left,
+    the only visible one, or the one you click."""
+    if preset_id is not None and sc.doc.Objects.FindId(preset_id) is not None:
+        return preset_id
+    vis = [o for o in all_scan_insts() if scan_visible(o)]
+    if len(vis) == 1:
+        return vis[0].Id
+    go = ric.GetObject()
+    go.SetCommandPrompt("Click the scan/mesh to draw the patches on <Esc = back to the scan/mesh tools>")
+    try:
+        go.GeometryFilter = ro.ObjectType.Mesh | ro.ObjectType.InstanceReference
+    except Exception:
+        import System
+        go.GeometryFilter = System.Enum.ToObject(ro.ObjectType, 32 | 4096)
+    if go.Get() != Rhino.Input.GetResult.Object:
+        return None
+    return go.Object(0).ObjectId
+
+
 def get_scan(preset_id=None):
     """Pick the mesh to work on - or run a mesh tool first (they move only
     the mesh BLOCKS; afterwards pick the mesh). preset_id: the mesh of the
-    session that was left for a mesh tool - taken again without asking."""
+    session that was left for a mesh tool: NOT taken again by itself - the
+    button / option BackToPatches goes back to it (after a tool you may want
+    another one first)."""
     obj_id = None
-    if preset_id is not None and sc.doc.Objects.FindId(preset_id) is not None:
-        obj_id = preset_id
-    panel = None if obj_id is not None else open_scan_panel()
+    back = preset_id is not None and sc.doc.Objects.FindId(preset_id) is not None
+    start_opt = "BackToPatches" if back else "DrawPatches"
+    panel = open_scan_panel(">>  Back to the patches  <<" if back else ">>  Draw patches  <<")
+    if back:
+        print("  Patches wait: the button 'Back to the patches' (or BackToPatches) goes on with them; "
+              "or another scan/mesh tool")
     while obj_id is None:
         go = ric.GetObject()
-        go.SetCommandPrompt("Click the mesh, or a mesh tool <Esc = quit>")
+        go.SetCommandPrompt(("BackToPatches = go on with the patches, or a scan/mesh tool <Esc = end msh2classA>")
+                            if back else
+                            ("Click the scan/mesh (or DrawPatches) to draw patches, or a scan/mesh tool "
+                             "<Esc = end msh2classA>"))
         try:
             go.GeometryFilter = ro.ObjectType.Mesh | ro.ObjectType.InstanceReference
         except Exception:
@@ -248,8 +291,12 @@ def get_scan(preset_id=None):
             go.GeometryFilter = System.Enum.ToObject(ro.ObjectType, 32 | 4096)
         go.EnablePreSelect(True, True)
         idx = {}
+        o_start = go.AddOption(start_opt)
         for (nm, fn) in SCAN_TOOLS:
             idx[go.AddOption(nm)] = nm
+        su = str(sc.sticky.get("M2CA_scan_units", "mm"))
+        o_su = go.AddOptionList("ScanMeshUnits", list(SCAN_UNIT_CHOICES),
+                                list(SCAN_UNIT_CHOICES).index(su) if su in SCAN_UNIT_CHOICES else 0)
         try: go.AcceptCustomMessage(True)            # the panel's scan buttons
         except Exception: pass
         scan_tools_ready(True)
@@ -259,9 +306,18 @@ def get_scan(preset_id=None):
             scan_tools_ready(False)
         if res == Rhino.Input.GetResult.CustomMessage:            # a scan button
             nm = take_pending_tool()
+            if nm == "DrawPatches":
+                obj_id = _patch_target(preset_id if back else None); continue
             if nm: run_scan_tool(nm)
             continue
         if res == Rhino.Input.GetResult.Option:
+            if go.Option().Index == o_start:
+                obj_id = _patch_target(preset_id if back else None); continue
+            if go.Option().Index == o_su:
+                sc.sticky["M2CA_scan_units"] = SCAN_UNIT_CHOICES[go.Option().CurrentListOptionIndex]
+                print("  ScanMeshUnits = {} - the scan/mesh FILES are in {} (LoadMeshes converts them to the document's "
+                      "units)".format(sc.sticky["M2CA_scan_units"], sc.sticky["M2CA_scan_units"]))
+                continue
             nm = idx.get(go.Option().Index)
             if nm: run_scan_tool(nm)
             continue
@@ -279,18 +335,18 @@ def get_scan(preset_id=None):
         return None
     get_scan.obj_id = obj_id             # for the Scan on/off view button
     if isinstance(obj.Geometry, rg.Mesh):
-        print("[OK] Mesh ({} faces)".format(obj.Geometry.Faces.Count))
+        print("[OK] Scan/mesh ({} faces)".format(obj.Geometry.Faces.Count))
         return obj.Geometry
     if not isinstance(obj, ro.InstanceObject):
-        print("[ERROR] Not a mesh or block."); return None
+        print("[ERROR] Not a scan/mesh or block."); return None
     xf = obj.InstanceXform
     key = "{}|{}|{}".format(sc.doc.RuntimeSerialNumber, obj_id,
                             ",".join("{:.6g}".format(xf[i, j]) for i in range(4) for j in range(4)))
     cache = sc.sticky.get("M2CA_meshcache")
     if cache and cache[0] == key:
-        print("[OK] Mesh from block (cached, {} faces)".format(cache[1].Faces.Count))
+        print("[OK] Scan/mesh from block (cached, {} faces)".format(cache[1].Faces.Count))
         return cache[1]
-    busy = show_busy("Extracting mesh from block (once)...")
+    busy = show_busy("Extracting scan/mesh from block (once)...", esc="end msh2classA")
     meshes = []
 
     def collect(idef, x):
@@ -307,12 +363,12 @@ def get_scan(preset_id=None):
     finally:
         hide_busy(busy)
     if not meshes:
-        print("[ERROR] No mesh in block."); return None
+        print("[ERROR] No scan/mesh in block."); return None
     joined = rg.Mesh()
     for m in meshes:
         joined.Append(m)
     joined.Compact(); joined.RebuildNormals()
     sc.sticky["M2CA_meshcache"] = (key, joined)
-    print("[OK] Mesh from block ({} faces) - cached for next runs".format(joined.Faces.Count))
+    print("[OK] Scan/mesh from block ({} faces) - cached for next runs".format(joined.Faces.Count))
     return joined
 

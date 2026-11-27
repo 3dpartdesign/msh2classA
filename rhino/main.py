@@ -18,7 +18,7 @@ def main():
     while True:
         mesh = get_scan(preset)
         if mesh is None: break
-        busy = show_busy("Preparing mesh...")
+        busy = show_busy("Preparing scan/mesh...", esc="end msh2classA")
         try:
             check_esc()
         except UserAbort:
@@ -44,6 +44,17 @@ def main():
             print("[INFO] no view panel (Eto) - the view buttons are drawn in the top right corner instead")
         hide_busy(busy)
         print("[OK] {} edges/curves pickable".format(len(session.cands)))
+        try:
+            so = sc.doc.Objects.FindId(session.scan_id) if session.scan_id else None
+            sname = so.InstanceDefinition.Name if isinstance(so, ro.InstanceObject) else "the scan/mesh"
+        except Exception:
+            sname = "the scan/mesh"
+        print("")
+        print("*" * 64)
+        print("*  PATCHES: drawing patches on '{}'".format(sname))
+        print("*  click the corners on the scan/mesh - right click = end a side")
+        print("*  (scan/mesh tools: the panel buttons; Help = every option)")
+        print("*" * 64)
         tool = None
         try:
             while True:
@@ -65,15 +76,17 @@ def main():
         n_total = sum(len(p) for p in session.patches)
         if tool is None:
             break
-        run_scan_tool(tool)                      # the scans may have moved: the scan is read again
+        run_scan_tool(tool, "the patches wait")                      # the scans may have moved: the scan is read again
         preset = session.scan_id; carry = session.patches
-        print("[{}] done - back to the patches (mesh read again where it is now)".format(tool))
+        print("[{}] done".format(tool))
     print("\n{} finished: {} patch(es) created.".format(VERSION, n_total))
 
 
 if __name__ == "__main__" and IN_RHINO:
     hook_escape()
     try:
+        try: pause_scanmirror()                     # blue MeshMirror points left over from a run that crashed
+        except Exception: pass
         try: scan_display_on()
         except Exception: pass
         main()
@@ -83,5 +96,9 @@ if __name__ == "__main__" and IN_RHINO:
         except Exception: pass
         sc.doc.Views.Redraw()
     finally:
+        try: _ScanDraw.off_all()                    # a mesh tool's drawing, if the script stopped inside it
+        except Exception: pass
+        try: pause_scanmirror()                     # MeshMirror points are drawn by the script: off when it ends
+        except Exception: pass
         try: scan_display_off()                     # views back to the modes they had
         except Exception: pass

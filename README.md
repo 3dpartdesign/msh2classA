@@ -20,7 +20,11 @@ All downloads: [Releases](https://github.com/3dpartdesign/msh2classA/releases).
 - Smooth, even out, straighten or relax a patch while its neighbours keep their continuity (Rhino).
 - Symmetry: mirror plane, mirrored patches, patches cut at the plane (Rhino).
 - Fillets with no trims, N-sided patches, global seam matching (Rhino).
-- Mesh tools: load, align, centre on the symmetry plane, put on the floor, save named setups (Rhino).
+- Patches over holes in the scan/mesh: draw 2 or 3 sides, the rest is made like Sweep1 (Rhino).
+- Scan/mesh tools (Rhino): load, centre on the symmetry plane, put on the floor, true size from a measured
+  curve (AI / photogrammetry meshes), align (also with scaling) and auto-align many at once, save named setups,
+  photos as guides (front / side / rear: centre, floor, scale, put loose parts in place). Done in any order
+  without losing the centre.
 - **The customer's scan files are never touched** - in every version. Meshes are linked references, not imported into your file. Their positions are kept in `scan_setups.json` next to the scans, the **same file for Rhino, Blender and FreeCAD**: work in Rhino, go on in Blender or FreeCAD, the scans stay where they were.
 
 ## Rhino
@@ -41,6 +45,7 @@ blender/   the Blender extension (experimental)
 freecad/   the FreeCAD workbench (experimental)
 assets/    matcap image
 tools/     build.py - builds all three versions
+tests/     test bench for the Rhino scan/mesh tools (a fake Rhino), see tests/README.md
 ```
 
 Build everything (Python 3):

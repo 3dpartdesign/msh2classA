@@ -40,7 +40,7 @@ bl_info = {
     "category": "Mesh",
 }
 
-SCAN_COLL = "msh2classA Scans"
+SCAN_COLL = "msh2classA Scans/meshes"
 PATCH_COLL = "msh2classA Patches"
 PLACEHOLDER = "M2CA_placeholder"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -117,7 +117,7 @@ def load_scan_mesh(obj, log=print):
     """(Re)read the scan file of obj into its mesh. The file is only read."""
     path = obj.get("m2ca_scan")
     if not path or not os.path.isfile(path):
-        log("[msh2classA] scan file not found: {}".format(path))
+        log("[msh2classA] scan/mesh file not found: {}".format(path))
         return False
     factor = float(obj.get("m2ca_scan_mm", 1.0)) / model_mm(bpy.context.scene)
     verts, tris = _read_scan(path, factor)
@@ -354,12 +354,12 @@ def _depsgraph_post(scene, depsgraph):
 class M2CA_Settings(bpy.types.PropertyGroup):
     cont: EnumProperty(name="Continuity", items=CONT_ITEMS, default="2",
                        description="Continuity of a new side to the patch it joins")
-    tol_mm: FloatProperty(name="Mesh tol (mm)", default=0.5, min=0.001, soft_max=10.0,
-                          description="Allowed deviation from the scan (CV count, report)")
+    tol_mm: FloatProperty(name="Scan/mesh tol (mm)", default=0.5, min=0.001, soft_max=10.0,
+                          description="Allowed deviation from the scan/mesh (CV count, report)")
     snap_px: IntProperty(name="Snap (px)", default=12, min=2, max=60,
                          description="Clicks this close (pixels) to a patch corner / edge go onto it")
-    scan_mm: FloatProperty(name="Scan units (mm)", default=1.0, min=1e-6,
-                           description="mm per unit of the scan FILES (1 = the scans are in mm)")
+    scan_mm: FloatProperty(name="Scan/mesh units (mm)", default=1.0, min=1e-6,
+                           description="mm per unit of the scan/mesh FILES (1 = the scans/meshes are in mm)")
     setup_name: StringProperty(name="Name", default="front")
     last_report: StringProperty(default="")
 
@@ -377,7 +377,7 @@ def _setup_items(self, context):
 class M2CA_OT_load_scans(bpy.types.Operator, ImportHelper):
     """Link scan meshes (STL / OBJ / PLY). The files are only read and never saved into the .blend"""
     bl_idname = "m2ca.load_scans"
-    bl_label = "Load scans"
+    bl_label = "Load scans/meshes"
     filter_glob: StringProperty(default="*.stl;*.obj;*.ply", options={"HIDDEN"})
     files: CollectionProperty(type=bpy.types.OperatorFileListElement, options={"HIDDEN", "SKIP_SAVE"})
     directory: StringProperty(subtype="DIR_PATH", options={"HIDDEN", "SKIP_SAVE"})
@@ -395,25 +395,25 @@ class M2CA_OT_load_scans(bpy.types.Operator, ImportHelper):
                 add_scan(p, st.scan_mm); n += 1
             except Exception as e:
                 self.report({"ERROR"}, "{}: {}".format(nm, e))
-        self.report({"INFO"}, "{} scan(s) linked (files untouched)".format(n))
+        self.report({"INFO"}, "{} scan(s)/mesh(es) linked (files untouched)".format(n))
         return {"FINISHED"}
 
 
 class M2CA_OT_reload_scans(bpy.types.Operator):
     """Read every scan again from its file"""
     bl_idname = "m2ca.reload_scans"
-    bl_label = "Reload scans"
+    bl_label = "Reload scans/meshes"
 
     def execute(self, context):
         n = sum(1 for o in scan_objects() if load_scan_mesh(o, log=lambda s: self.report({"WARNING"}, s)))
-        self.report({"INFO"}, "{} scan(s) read again".format(n))
+        self.report({"INFO"}, "{} scan(s)/mesh(es) read again".format(n))
         return {"FINISHED"}
 
 
 class M2CA_OT_check_scans(bpy.types.Operator):
     """Are the scan files still the ones you loaded? (SHA-256)"""
     bl_idname = "m2ca.check_scans"
-    bl_label = "Check scan files"
+    bl_label = "Check scan/mesh files"
 
     def execute(self, context):
         bad = []
@@ -427,7 +427,7 @@ class M2CA_OT_check_scans(bpy.types.Operator):
         if bad:
             self.report({"WARNING"}, "CHANGED since loaded: " + ", ".join(bad))
         else:
-            self.report({"INFO"}, "All scan files unchanged")
+            self.report({"INFO"}, "All scan/mesh files unchanged")
         return {"FINISHED"}
 
 
@@ -449,7 +449,6 @@ class M2CA_OT_apply_setup(bpy.types.Operator):
         if not st:
             self.report({"WARNING"}, "no setup '{}'".format(self.setup)); return {"CANCELLED"}
         mm = model_mm(context.scene)
-        want_mm = m2setups.unit_mm(st.get("_units"))
         n = 0; ref = None; missing = []
         for o in objs:
             rec = m2setups.find_record(st, o["m2ca_scan"])
@@ -458,9 +457,6 @@ class M2CA_OT_apply_setup(bpy.types.Operator):
             w = m2setups.check_file(rec, o["m2ca_scan"])
             if w:
                 self.report({"WARNING"}, w)
-            if abs(float(o.get("m2ca_scan_mm", 1.0)) - want_mm) > 1e-12:
-                o["m2ca_scan_mm"] = want_mm
-                load_scan_mesh(o)
             m = m2setups.scaled_matrix(rec, st, mm)
             M = Matrix([m[0:4], m[4:8], m[8:12], m[12:16]])
             if ref is None:
@@ -471,7 +467,7 @@ class M2CA_OT_apply_setup(bpy.types.Operator):
             if ref is not None:
                 o.matrix_world = ref @ o.matrix_world
         _BVH.clear()
-        self.report({"INFO"}, "setup '{}' applied to {} scan(s)".format(self.setup, n))
+        self.report({"INFO"}, "setup '{}' applied to {} scan(s)/mesh(es)".format(self.setup, n))
         return {"FINISHED"}
 
 
@@ -483,13 +479,11 @@ class M2CA_OT_save_setup(bpy.types.Operator):
     def execute(self, context):
         objs = scan_objects()
         if not objs:
-            self.report({"WARNING"}, "no scans"); return {"CANCELLED"}
+            self.report({"WARNING"}, "no scans/meshes"); return {"CANCELLED"}
         name = context.scene.m2ca.setup_name.strip() or "front"
         mm = model_mm(context.scene)
-        scan_mm = float(objs[0].get("m2ca_scan_mm", 1.0))
-        unit = [k for k, v in m2setups.UNIT_MM.items() if abs(v - scan_mm) < 1e-12]
-        units = unit[0] if unit else "mm"
-        f = mm / m2setups.unit_mm(units)            # Blender units -> setup units
+        units = "mm"                                # setups from Blender: moves in mm
+        f = mm                                      # Blender units -> mm
         recs = []
         for o in objs:
             M = o.matrix_world
@@ -529,7 +523,7 @@ class M2CA_OT_new_patch(bpy.types.Operator):
         if context.area is None or context.area.type != "VIEW_3D":
             self.report({"WARNING"}, "run it in a 3D Viewport"); return {"CANCELLED"}
         if not scan_objects(visible_only=True):
-            self.report({"WARNING"}, "load a scan first"); return {"CANCELLED"}
+            self.report({"WARNING"}, "load a scan/mesh first"); return {"CANCELLED"}
         self.mesh = BlenderMesh(scan_objects(visible_only=True))
         self.pts = []
         self.hover = None
@@ -539,7 +533,7 @@ class M2CA_OT_new_patch(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
     def _status(self, context):
-        context.area.header_text_set("msh2classA (experimental): click corner {} of 4 on the scan   "
+        context.area.header_text_set("msh2classA (experimental): click corner {} of 4 on the scan/mesh   "
                                      "Backspace = undo point   Esc / right click = finish".format(len(self.pts) + 1))
 
     def _finish(self, context):
@@ -625,7 +619,7 @@ class M2CA_OT_new_patch(bpy.types.Operator):
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
             p = self._pick(context, event)
             if p is None:
-                self.report({"WARNING"}, "no scan under the mouse")
+                self.report({"WARNING"}, "no scan/mesh under the mouse")
                 return {"RUNNING_MODAL"}
             self.pts.append(Vector(p))
             if len(self.pts) == 4:
@@ -654,7 +648,7 @@ class M2CA_OT_new_patch(bpy.types.Operator):
         dev = res.get("deviation")
         txt = "{}: {}x{} CV".format(obj.name, res["pu"] + 1, res["pv"] + 1)
         if dev:
-            txt += ", scan deviation P90 {:.3f} max {:.3f} mm".format(dev[0] * mm, dev[1] * mm)
+            txt += ", scan/mesh deviation P90 {:.3f} max {:.3f} mm".format(dev[0] * mm, dev[1] * mm)
         st.last_report = txt
         self.report({"INFO"}, txt)
 
@@ -775,7 +769,7 @@ class M2CA_PT_main(bpy.types.Panel):
         box.label(text="Check every result before you use it.")
 
         col = lay.column(align=True)
-        col.label(text="Scans (files never changed)")
+        col.label(text="Scans/meshes (files never changed)")
         col.prop(st, "scan_mm")
         col.operator("m2ca.load_scans", icon="IMPORT")
         row = col.row(align=True)

@@ -10,6 +10,7 @@ core/patch_fit.py
 core/smoothing.py
 rhino/doc_settings.py
 rhino/scan_tools.py
+rhino/photos.py
 rhino/panels.py
 rhino/candidates.py
 rhino/sides.py

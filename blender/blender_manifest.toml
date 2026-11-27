@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "msh2classA"
-version = "0.1.1-alpha"
+version = "0.1.2-alpha"
 name = "msh2classA (experimental)"
 tagline = "Scans and AI meshes to Class-A NURBS patches - experimental"
 maintainer = "Marcin Bartoszewski <info@3dPARTdesign.com>"

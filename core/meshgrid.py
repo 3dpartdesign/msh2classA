@@ -83,14 +83,17 @@ class TriMesh(object):
         best = None
         rmax = max(self.dim)
         seen = set()
+        D = self.dim
         for r in range(rmax + 1):
-            for x in range(c[0] - r, c[0] + r + 1):
-                if x < 0 or x >= self.dim[0]: continue
-                for y in range(c[1] - r, c[1] + r + 1):
-                    if y < 0 or y >= self.dim[1]: continue
-                    for z in range(c[2] - r, c[2] + r + 1):
-                        if z < 0 or z >= self.dim[2]: continue
-                        if max(abs(x - c[0]), abs(y - c[1]), abs(z - c[2])) != r: continue
+            # only the cells ON the shell r around c (not the whole cube), inside the grid
+            for x in range(max(0, c[0] - r), min(D[0] - 1, c[0] + r) + 1):
+                ex = abs(x - c[0]) == r
+                for y in range(max(0, c[1] - r), min(D[1] - 1, c[1] + r) + 1):
+                    if ex or abs(y - c[1]) == r:
+                        zs = range(max(0, c[2] - r), min(D[2] - 1, c[2] + r) + 1)
+                    else:
+                        zs = [z for z in (c[2] - r, c[2] + r) if 0 <= z < D[2]] if r else [c[2]]
+                    for z in zs:
                         for ti in self.grid.get((x, y, z), ()):
                             if ti in seen: continue
                             seen.add(ti)

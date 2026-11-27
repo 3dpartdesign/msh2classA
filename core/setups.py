@@ -10,7 +10,7 @@ File layout (the Rhino version writes the same, without the "_units" /
 {
   "front": {                                  <- setup name
     "_saved": 1764160000.0,                   <- time.time() when saved
-    "_units": "mm",                           <- unit of the matrix moves AND of the scan coordinates
+    "_units": "mm",                           <- unit of the matrix moves ("_mm_per_unit": 1.0 as a number)
     "_format": "msh2classA-setup/1",
     "Bumper_scan": {                          <- mesh name (file name without extension)
       "file": "Bumper_scan.stl",
@@ -21,6 +21,7 @@ File layout (the Rhino version writes the same, without the "_units" /
   }
 }
 Keys starting with "_" are not meshes. Setups without "_units" are taken as mm.
+The scan FILES have their own units (ScanMeshUnits in Rhino, default mm) - not the setup's.
 """
 from __future__ import print_function, division
 import hashlib
@@ -53,6 +54,16 @@ def mesh_name(path):
 def unit_mm(units):
     """mm per unit; unknown -> mm."""
     return UNIT_MM.get((units or "mm").lower(), 1.0)
+
+
+def setup_mm(setup):
+    """mm per unit of a setup's matrices: "_mm_per_unit", else "_units", else mm (older files)."""
+    try:
+        v = setup.get("_mm_per_unit")
+        if v: return float(v)
+    except Exception:
+        pass
+    return unit_mm(setup.get("_units"))
 
 
 def setup_files(scan_paths):
@@ -115,15 +126,15 @@ def scaled_matrix(rec, setup, model_mm):
     """The record's 4x4 (row-major, 16 numbers) for a model in model_mm mm per
     unit: the moves scaled, the turn unchanged."""
     m = list(rec["matrix_row_major"])
-    f = unit_mm(setup.get("_units")) / model_mm
+    f = setup_mm(setup) / model_mm
     for i in (3, 7, 11):
         m[i] *= f
     return m
 
 
-def scan_scale(setup_units, model_mm):
-    """Factor for the scan coordinates (they are in the setup unit)."""
-    return unit_mm(setup_units) / model_mm
+def scan_scale(scan_units_mm, model_mm):
+    """Factor for the scan coordinates: scan file units (ScanMeshUnits) -> model units."""
+    return scan_units_mm / model_mm
 
 
 def check_file(rec, path):
@@ -143,7 +154,7 @@ def check_file(rec, path):
 
 def make_setup(scans, units="mm", hashes=None):
     """scans: [(path, matrix_row_major in `units`, extra dict or None)] -> setup dict."""
-    st = {"_saved": time.time(), "_units": units, "_format": FORMAT}
+    st = {"_saved": time.time(), "_units": units, "_mm_per_unit": unit_mm(units), "_format": FORMAT}
     for (path, m, extra) in scans:
         rec = dict(extra or {})
         rec["file"] = os.path.basename(path)

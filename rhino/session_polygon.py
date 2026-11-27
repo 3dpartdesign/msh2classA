@@ -19,6 +19,7 @@ class PolygonMixin(object):
         self.bubbles = {}            # side k -> Point3d of its clickable bubble
         self.hover_bubble = None
         self.picks = []        # undo stack
+        self.sweep_sides = []  # sides made by Sweep (no scan/mesh under them)
 
     def corner(self, pt):
         """Corner + all edges/curves it lies on (within tolerance)."""
@@ -90,7 +91,7 @@ class PolygonMixin(object):
             return "G0 crv"
         if kind == "mirror":
             return u"mirror | {} \u25BC".format(LEVEL_NAME[self.level_for_side(k)])
-        return u"mesh | {} later \u25BC".format(LEVEL_NAME[self.level_for_side(k)])
+        return u"scan/mesh | {} later \u25BC".format(LEVEL_NAME[self.level_for_side(k)])
 
     def bubble_tip(self, k):
         kind, c = self.preview_side(k)
@@ -100,7 +101,7 @@ class PolygonMixin(object):
         n = self.dir_cv(d_across)
         size = str(n)
         if all(self.preview_side(e)[0] == "scan" for e in ends):
-            size += "+ (more if the mesh needs it)"
+            size += "+ (more if the scan/mesh needs it)"
         if kind == "edge":
             return "click: G0 -> G1 -> G2 to this neighbour   (across: {} = {} CV)".format(rows, size)
         if kind == "curve":
@@ -109,7 +110,7 @@ class PolygonMixin(object):
             return ("click: G0 -> G1 -> G2 to the mirrored copy ({} plane). G0 = edge on the plane, "
                     "G1 = 2nd row straight across it, G2 = 3rd row at twice its distance   (across: {} = {} CV)".format(
                         self.s_mirror(), rows, size))
-        return ("click: reserve rows for a FUTURE G0 -> G1 -> G2 neighbour here; free (follow the mesh) "
+        return ("click: reserve rows for a FUTURE G0 -> G1 -> G2 neighbour here; free (follow the scan/mesh) "
                 "until then   (across: {} = {} CV)".format(rows, size))
 
     def cycle_cv(self, k):
@@ -318,22 +319,38 @@ class PolygonMixin(object):
         return best[1] if best else None
 
     def prompt(self):
+        # what right click / Esc do here (see collect_polygon): in a mode only that mode ends
+        em = getattr(self, "edge_mode", None)
+        if em:
+            if em.get("side") is None:
+                return "FreeEdgeEdt: click the free edge to redraw <right click / Esc = cancel FreeEdgeEdt>"
+            if em.get("mode") == "line":
+                return "FreeEdgeEdt: points on the scan/mesh where the edge goes <right click = apply, Esc = cancel FreeEdgeEdt>"
+            return "FreeEdgeEdt: start AT a corner dot, or BESIDE the patch for a new line <Esc = cancel FreeEdgeEdt>"
+        if getattr(self, "match_mode", None):
+            return "MatchUVN: click a seam bubble, Apply or Cancel <right click / Esc = cancel MatchUVN>"
         if getattr(self, "fillet_mode", None):
             fm_ = self.fillet_mode
             if fm_.get("kind") == "npatch":
-                return "NPatch: corner {} <right click = build, Esc = cancel>".format(len(fm_["pts"]) + 1)
+                return "NPatch: corner {} <right click = build, Esc = cancel NPatch>".format(len(fm_["pts"]) + 1)
             nxt = "side B" if fm_["side"] == "A" else "radius"
-            return "Fillet side {}: corner {} <right click = {}, Esc = cancel>".format(fm_["side"], len(fm_["pts"]) + 1, nxt)
+            return "Fillet side {}: corner {} <right click = {}, Esc = cancel Fillet>".format(fm_["side"], len(fm_["pts"]) + 1, nxt)
         n = len(self.corners)
         info = "{} default, {} {}".format(self.s_cont(), self.s_fit(), self.s_spans())
         if n == 0:
-            return "Patch {}: side 1 start ({}), or hover a patch: patch buttons <right click = finish>".format(
+            return "Patch {}: side 1 start ({}), or hover a patch: patch buttons <right click / Esc = end msh2classA>".format(
                 len(self.patches) + 1, info)
         if n == 4:
-            return "Side 4 back to corner 1: points on mesh <right click = BUILD>"
+            if self.s_sweep() and not self.pend:
+                return ("Side 4 back to corner 1: points on scan/mesh <right click = BUILD - Sweep makes side 4 from "
+                        "side 2, Esc = clear this patch>")
+            return "Side 4 back to corner 1: points on scan/mesh <right click = BUILD, Esc = clear this patch>"
+        if n == 3 and self.s_sweep() and not self.pend:
+            return ("Side 3: click on scan/mesh, or right click = BUILD with Sweep (sides 3 and 4 made from 1 and 2) "
+                    "<Undo, Esc = clear this patch>")
         if not self.pend:
-            return "Side {}: click on mesh (or edge/curve = corner) <Undo>".format(n)
-        return "Side {}: more points on mesh <right click = end side>".format(n)
+            return "Side {}: click on scan/mesh (or edge/curve = corner) <Undo, Esc = clear this patch>".format(n)
+        return "Side {}: more points on scan/mesh <right click = end side, Esc = clear this patch>".format(n)
 
     def collect_polygon(self):
         while True:
@@ -378,6 +395,14 @@ class PolygonMixin(object):
                     self.fillet_mode = None; self.fillet_preview = None; continue
                 if getattr(self, "match_mode", None):
                     self.match_mode = None; print("[MatchUVN] cancelled - patch buttons back"); continue
+                if self.corners or self.pend:
+                    # Esc with an unfinished patch: only that patch is cleared; Esc again ends msh2classA
+                    self.reset_polygon()
+                    print("[Esc] unfinished patch cleared (finished patches stay) - Esc again = end msh2classA")
+                    try: self.refresh()
+                    except Exception: pass
+                    sc.doc.Views.Redraw()
+                    continue
                 return "exit"
             if res == Rhino.Input.GetResult.Nothing:
                 if getattr(self, "edge_mode", None):
@@ -403,8 +428,12 @@ class PolygonMixin(object):
                             self.shape[3] = list(self.pend)
                         self.pend = []
                     return "build"
+                if len(self.corners) == 3 and not self.pend and self.s_sweep():
+                    return "build"                       # Sweep: 2 sides drawn, 3 and 4 are made
                 if not self.end_side_here():
-                    print("  Side {} needs at least one point (Undo / Clear).".format(len(self.corners)))
+                    print("  Side {} needs at least one point (Undo / Clear{}).".format(
+                        len(self.corners), "; Sweep=On: right click with no point = build from 2 sides" if
+                        self.s_sweep() else ""))
                 continue
             if res == Rhino.Input.GetResult.Option:
                 self.handle_option(gp.Option(), ui)
@@ -447,7 +476,7 @@ class PolygonMixin(object):
                         continue
                 if len(self.corners) == 4:
                     if hits:
-                        print("  Side 4 closes at corner 1 - click on mesh to bend it, right click = build.")
+                        print("  Side 4 closes at corner 1 - click on scan/mesh to bend it, right click = build.")
                     else:
                         self.pend.append(pt); self.picks.append(("pend",))
                     continue
@@ -462,7 +491,7 @@ class PolygonMixin(object):
                         hide_busy(busy)
                     self.warmed = True
                 if len(self.corners) == 4:
-                    print("  4 corners. Side 4: points on mesh or right click = build.")
+                    print("  4 corners. Side 4: points on scan/mesh or right click = build.")
                 continue
             return "exit"
 

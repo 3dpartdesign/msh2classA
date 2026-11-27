@@ -11,13 +11,17 @@
 class BuildMixin(object):
     def undo_patch(self):
         if not self.patches: return
+        n_before = len(self.patches)
         ids = self.patches.pop()
         for i in ids:
             sc.doc.Objects.Delete(i, True)
         sc.doc.Views.Redraw()
+        had_pts = bool(self.corners)
         self.reset_polygon()
         self.refresh()
-        print("[UNDO] removed {} patch(es), polygon cleared".format(len(ids)))
+        print("[UndoSrf] the LAST patch removed (patch {}{}){} - {} patch(es) left; UndoSrf again = the one before".format(
+            n_before, "" if len(ids) == 1 else ": {} surfaces of one build (SrfSplit=AutoSplit)".format(len(ids)),
+            ", the points you were clicking cleared" if had_pts else "", len(self.patches)))
 
     def resolve_side(self, k, ox, use_mesh):
         sd_ = self._resolve_side(k, ox, use_mesh)
@@ -39,7 +43,7 @@ class BuildMixin(object):
             pts = []
             for i in range(61):
                 p = crv.PointAt(dom.ParameterAt(i / 60.0))
-                if use_mesh and 0 < i < 60:
+                if use_mesh and 0 < i < 60 and k not in getattr(self, "sweep_sides", ()):   # Sweep side: no scan
                     q = self.scan_pt(p)
                     if q is not None: p = q
                 pts.append(p)
@@ -59,7 +63,95 @@ class BuildMixin(object):
             return sd_
         return edge_side(c, a["pt"], b["pt"], ox)
 
+    # ---- Sweep: 2 or 3 sides drawn, the rest made ------------------------------
+    def _side_pts(self, k, n=41):
+        use_mesh = self.s_fit() in ("Mesh", "NoScan") and k not in self.sweep_sides
+        sd_ = self._resolve_side(k, (0.0, 0.0, 0.0), use_mesh)
+        return [sd_.fn(i / float(n - 1)) for i in range(n)]
+
+    def sweep_complete(self):
+        """Sweep=On: the missing side(s) like Rhino's Sweep1 - no scan/mesh
+        under them (a hole, a window):
+          3 sides drawn: side 4 = side 2 (its opposite) carried onto corners
+            4 -> 1 (turned + scaled to fit them)
+          2 sides drawn: side 1 is the profile, side 2 the rail: side 3 =
+            side 1 carried along side 2 (turning with it), side 4 = the path
+            of corner 1 along the rail; corner 4 is where they meet
+        Each made side takes the rows (G0 / G1 / G2) of its opposite side; one
+        that falls on the symmetry plane becomes a MIRROR side."""
+        self.sweep_sides = []
+        n = len(self.corners)
+        if not self.s_sweep() or n < 3:
+            return True
+        ax = MIRROR_AXIS.get(self.s_mirror()); mtol = self.s_mtol()
+
+        def on_plane(p):
+            return ax is not None and abs([p.X, p.Y, p.Z][ax]) <= mtol
+
+        def flat(p):
+            c = [p.X, p.Y, p.Z]; c[ax] = 0.0; return rg.Point3d(c[0], c[1], c[2])
+
+        if n == 4:
+            if self.shape.get(3) or self.common(self.corners[3], self.corners[0]) is not None:
+                return True                                  # side 4 is drawn / follows an edge
+            src = list(reversed(self._side_pts(1)))          # side 2, from corner 3 to corner 2
+            a0, a1 = src[0], src[-1]; b0, b1 = self.corners[3]["pt"], self.corners[0]["pt"]
+            u = a1 - a0; v = b1 - b0
+            if u.Length < 1e-12 or v.Length < 1e-12:
+                print("  [Sweep] side 2 has no length - side 4 not made"); return False
+            R = rg.Transform.Rotation(u, v, a0); f = v.Length / u.Length
+            pts = []
+            for p in src:
+                q = rg.Point3d(p); q.Transform(R)
+                pts.append(rg.Point3d(b0.X + (q.X - a0.X) * f, b0.Y + (q.Y - a0.Y) * f, b0.Z + (q.Z - a0.Z) * f))
+            if on_plane(b0) and on_plane(b1): pts = [flat(p) for p in pts]
+            self.shape[3] = pts[1:-1]
+            self.sweep_sides = [3]
+            if 3 not in self.side_g: self.side_g[3] = self.layout_for_side(1)
+            print("  [Sweep] side 4 made from side 2 ({} rows like it)".format(self.layout_for_side(1) + 1))
+            return True
+        # n == 3: profile = side 1 (corner 1 -> 2), rail = side 2 (corner 2 -> 3)
+        prof = self._side_pts(0); rail = self._side_pts(1, 121)
+        c0, c1, c2 = self.corners[0]["pt"], self.corners[1]["pt"], self.corners[2]["pt"]
+
+        def tang(i):
+            m = len(rail) - 1
+            if i == 0:                                   # 2nd order at the ends (the end turn must be right)
+                t = (rail[1] - rail[0]) * 4.0 - (rail[2] - rail[0]) * 1.0
+            elif i == m:
+                t = (rail[m] - rail[m - 1]) * 4.0 - (rail[m] - rail[m - 2]) * 1.0
+            else:
+                t = rail[i + 1] - rail[i - 1]
+            t.Unitize(); return t
+        t0 = tang(0)
+        frames = []                                      # the profile turns with the rail (minimal turn)
+        for i in range(len(rail)):
+            frames.append(rg.Transform.Rotation(t0, tang(i), rg.Point3d(0, 0, 0)))
+        end = frames[-1]
+        side3 = []                                       # corner 3 -> corner 4: the profile at the rail's end
+        for p in reversed(prof):                         # from corner 2 back to corner 1
+            d = p - c1; d.Transform(end); side3.append(c2 + d)
+        path = []                                        # corner 1 along the rail -> corner 4
+        for i, q in enumerate(rail):
+            d = c0 - c1; d.Transform(frames[i]); path.append(q + d)
+        mirror = on_plane(c2)
+        if mirror:
+            side3 = [flat(p) for p in side3]; path[-1] = flat(path[-1])
+        c3 = side3[-1]
+        path[-1] = c3
+        side4 = list(reversed(path))                     # corner 4 -> corner 1
+        self.corners.append(self.corner(c3))
+        self.shape[2] = side3[1:-1]; self.shape[3] = side4[1:-1]
+        self.sweep_sides = [2, 3]
+        for k, opp in ((2, 0), (3, 1)):
+            if k not in self.side_g: self.side_g[k] = self.layout_for_side(opp)
+        print("  [Sweep] side 3 made from side 1, side 4 from side 2{} - rows like their opposite sides".format(
+            " (side 3 on the symmetry plane: a MIRROR side)" if mirror else ""))
+        return True
+
     def build(self):
+        if not self.sweep_complete():
+            return
         red, blue = self.dir_cv(0), self.dir_cv(1)      # None = auto (scan)
         fit_mode = self.s_fit(); auto = self.s_spans() == "Auto"
         fit_pts = None
@@ -98,12 +190,12 @@ class BuildMixin(object):
             if s.kind == "edge": desc.append("{}:{}".format(k + 1, SIDE_LV_NAME[self.raw_side_level(k)]))
             elif s.kind == "curve": desc.append("{}:crv".format(k + 1))
             elif k in self.mirror_sides: desc.append("{}:mirror {}".format(k + 1, LEVEL_NAME[mirror_lv[k]]))
-            else: desc.append("{}:scan".format(k + 1))
+            else: desc.append("{}:scan/mesh".format(k + 1))
         print("\n=== Patch {} | {} | {} | {} | sides {} ===".format(
             len(self.patches) + 1,
             self.size_text(),
             fit_mode, "Auto spans" if auto else "Single",
-            ", ".join(desc) if desc else "all on mesh"))
+            ", ".join(desc) if desc else "all on scan/mesh"))
         self.warn_scan_sides(sides)
         fs = [s.fast for s in sides]
         coons = lambda u, v: coons_point(fs, u, v)
@@ -127,7 +219,7 @@ class BuildMixin(object):
             parts = []
             for k in ends:
                 if sides[k].kind == "edge": lab = SIDE_LV_NAME[self.raw_side_level(k)]
-                elif sides[k].kind == "scan": lab = "mesh, {} later".format(LEVEL_NAME[self.level_for_side(k)])
+                elif sides[k].kind == "scan": lab = "scan/mesh, {} later".format(LEVEL_NAME[self.level_for_side(k)])
                 else: lab = "curve"
                 parts.append("{}({})".format(self.side_rows(k), lab))
             return " + ".join(parts)
@@ -135,12 +227,16 @@ class BuildMixin(object):
         def count(d, n):
             ends = (1, 3) if d == 0 else (0, 2)
             why = rows_why(d)
-            if fit_mode != "NoScan" and all(sides[k].kind == "scan" for k in ends):
+            if fit_mode != "NoScan" and all(sides[k].kind == "scan" for k in ends) and not sweep_:
                 lay = [self.layout_for_side(k_) if s_.kind == "edge" else 0 for k_, s_ in enumerate(sides)]
                 need = self.auto_cv(d, sides, lay, iso_lines, auto)[0]
                 if need > n:
-                    return need, why + ", raised to {} for the mesh".format(need)
+                    return need, why + ", raised to {} for the scan/mesh".format(need)
             return n, why
+        sweep_ = list(getattr(self, "sweep_sides", []) or [])
+        if sweep_ and auto:
+            print("  [INFO] Sweep: one patch (SrfSplit=AutoSplit needs the scan/mesh all over)")
+            auto = False
         nu, why_u = count(0, red)
         nv, why_v = count(1, blue)
         print("  PINK {}CV ({})   BLUE {}CV ({})".format(nu, why_u, nv, why_v))
@@ -157,7 +253,7 @@ class BuildMixin(object):
                 if k % 2 == 1 and s.along_deg > deg_v:
                     print("  [INFO] BLUE raised to {}CV to follow side {} exactly".format(s.along_deg + 1, k + 1)); deg_v = s.along_deg
         if auto and fit_mode == "NoScan":
-            print("  [INFO] SrfSplit=AutoSplit needs the mesh - NoScan builds one patch")
+            print("  [INFO] SrfSplit=AutoSplit needs the scan/mesh - NoScan builds one patch")
             auto = False
         if auto:
             tol = self.s_tol()
@@ -168,6 +264,8 @@ class BuildMixin(object):
             print("  -> {} x {} = {} patch(es)".format(su, sv, su * sv))
 
         du = BDir(deg_u, su); dv = BDir(deg_v, sv)
+        cs_ = [T(c["pt"]) for c in self.corners]
+        sweep_lim = max(10.0 * self.s_tol(), 0.08 * max(v_dist(a, b) for a in cs_ for b in cs_))
         if fit_mode == "Mesh":
             # Start ON the scan (as v49 did with projected curves): the Coons
             # interior between the drawn sides is projected onto the visible
@@ -178,7 +276,10 @@ class BuildMixin(object):
                 cu = v_sub(coons(min(1.0, u + h), v), coons(max(0.0, u - h), v))
                 cv = v_sub(coons(u, min(1.0, v + h)), coons(u, max(0.0, v - h)))
                 q = self.scan_pt(rg.Point3d(p[0] + ox[0], p[1] + ox[1], p[2] + ox[2]), v_cross(cu, cv))
-                return v_sub(T(q), ox) if q is not None else p
+                if q is None: return p
+                t = v_sub(T(q), ox)
+                if sweep_ and v_dist(t, p) > sweep_lim: return p      # through the hole: keep the Sweep shape
+                return t
             P0 = fit_to_function(du, dv, start_fn)
         else:
             P0 = fit_to_function(du, dv, coons)
@@ -260,22 +361,29 @@ class BuildMixin(object):
             params = [(i / float(nsu - 1), j / float(nsv - 1)) for i in range(nsu) for j in range(nsv)]
 
             def data_fn(P):
-                raw = []
+                raw = []; miss = []
                 for (u, v) in params:
                     Dd = srf_derivs(du, dv, P, u, v, 1)
                     s = Dd[(0, 0)]
                     ns_ = v_cross(Dd[(1, 0)], Dd[(0, 1)])
                     q = self.scan_pt(rg.Point3d(s[0] + ox[0], s[1] + ox[1], s[2] + ox[2]),
                                      ns_ if v_len(ns_) > 1e-12 else None, fit=True)
-                    if q is None: continue
+                    if q is None:
+                        miss.append((u, v)); continue
                     t = v_sub(T(q), ox)
+                    if sweep_ and v_dist(t, coons(u, v)) > sweep_lim:
+                        miss.append((u, v)); continue          # Sweep: a hit through the hole (inside the car)
                     raw.append((u, v, t, v_dist(s, t)))
-                if not raw: return []
-                kk = max(2.5 * median([r[3] for r in raw]), self.size * 1e-7)
                 out = []
-                for (u, v, t, d) in raw:
-                    if d > 6.0 * kk: continue
-                    out.append((u, v, t, 1.0 if d <= kk else kk / d))
+                if raw:
+                    kk = max(2.5 * median([r[3] for r in raw]), self.size * 1e-7)
+                    for (u, v, t, d) in raw:
+                        if d > 6.0 * kk:
+                            miss.append((u, v)); continue
+                        out.append((u, v, t, 1.0 if d <= kk else kk / d))
+                if sweep_:
+                    for (u, v) in miss:                         # no scan/mesh here: the Sweep shape, softly
+                        out.append((u, v, coons(u, v), 0.3))
                 return out
             iters = 8
         elif fit_mode == "NoScan":
@@ -354,9 +462,9 @@ class BuildMixin(object):
             print("  Side {} mirror {}: off plane {:.5f}  normal tilt to plane {:.3f} deg".format(
                 k + 1, LEVEL_NAME[mirror_lv[k]], dmax, tilt))
         if getattr(self, "n_wall", 0):
-            print("  [INFO] mesh faces turned away from the patch (walls, ribs, opposite side) were ignored ({} samples over all iterations)".format(self.n_wall))
+            print("  [INFO] scan/mesh faces turned away from the patch (walls, ribs, opposite side) were ignored ({} samples over all iterations)".format(self.n_wall))
         if getattr(self, "n_back", 0):
-            print("  [INFO] {} mesh samples hit the hidden (back) side - taken from the visible side instead".format(self.n_back))
+            print("  [INFO] {} scan/mesh samples hit the hidden (back) side - taken from the visible side instead".format(self.n_back))
 
     def warn_scan_sides(self, sides):
         """A side on the MESH that runs right beside a neighbour's edge leaves
@@ -368,7 +476,7 @@ class BuildMixin(object):
                 if c.kind != "edge" or not c.near_bbox(T(mid), 5.0 * self.edge_snap_dist()): continue
                 ok, t = c.crv.ClosestPoint(mid)
                 if ok and c.crv.PointAt(t).DistanceTo(mid) < 5.0 * self.edge_snap_dist():
-                    print("  [WARN] side {} runs along a neighbour's edge but is fitted to the MESH (its corners "
+                    print("  [WARN] side {} runs along a neighbour's edge but is fitted to the SCAN/MESH (its corners "
                           "are not both on that edge) - expect a gap. UndoSrf and click both corners ON the edge "
                           "(yellow) or its end.".format(k + 1))
                     break
@@ -400,12 +508,12 @@ class BuildMixin(object):
                     got = deg + 1; break
             if got is None:
                 got = 6
-                print("  [INFO] {} direction: even 6CV is {:.3f} off the mesh (MeshTol {:.3f}) - "
+                print("  [INFO] {} direction: even 6CV is {:.3f} off the scan/mesh (MeshTol {:.3f}) - "
                       "smaller patch or SrfSplit=AutoSplit".format("PINK" if d == 0 else "BLUE", worst, tol))
             if got > req:
-                req = got; why.append("scan")
+                req = got; why.append("scan/mesh")
             elif not why:
-                why.append("scan")
+                why.append("scan/mesh")
         return req, ", ".join(why)
 
     def curvature_tip(self, k, s, du, dv, P0, ox):
@@ -424,7 +532,7 @@ class BuildMixin(object):
             W = v_dist(srf_point(du, dv, P0, u, v), srf_point(du, dv, P0, uo, vo))
             bump = (abs(kn) - abs(ks)) * W * W / 12.0     # only when the neighbour is MORE curved
             if abs(kn) > 2.0 * abs(ks) and bump > max(0.2 * self.s_tol(), 0.05):
-                print("  [TIP] side {}: the neighbour is curved across the edge (R {:.0f}) and the mesh here is "
+                print("  [TIP] side {}: the neighbour is curved across the edge (R {:.0f}) and the scan/mesh here is "
                       "flatter (R {:.0f}). G2 makes this patch start with the neighbour's curvature -> expect a "
                       "bump of about {:.2f}. Better: build the FLATTER patch first and the curved one G2 to it "
                       "(the curvature then ramps inside the curved patch), or use G1 on this side.".format(
@@ -536,10 +644,10 @@ class BuildMixin(object):
         free = nu * nv - len(locked)
         bulges = len(prob.conts)
         if prob.conts and free == 0:
-            print("  Mesh can shape: 0 inner CV + {} bulge value(s). The patch is defined by its neighbours "
-                  "(class-A blend). If it is far from the mesh: make the patch narrower or split it.".format(bulges))
+            print("  Scan/mesh can shape: 0 inner CV + {} bulge value(s). The patch is defined by its neighbours "
+                  "(class-A blend). If it is far from the scan/mesh: make the patch narrower or split it.".format(bulges))
         elif prob.conts:
-            print("  Mesh can shape: {} inner CV + {} bulge value(s).".format(free, bulges))
+            print("  Scan/mesh can shape: {} inner CV + {} bulge value(s).".format(free, bulges))
 
     def report(self, du, dv, P, ox, sides, prob, fit_mode, fit_pts):
         devs = []
@@ -550,7 +658,7 @@ class BuildMixin(object):
                     s = srf_point(du, dv, P, i / (n - 1.0), j / (n - 1.0))
                     q = self.scan_pt(rg.Point3d(s[0] + ox[0], s[1] + ox[1], s[2] + ox[2]))
                     if q is not None: devs.append(v_dist(s, v_sub(T(q), ox)))
-            label = "scan" if fit_mode == "Mesh" else "mesh (NoScan - for information only)"
+            label = "scan/mesh" if fit_mode == "Mesh" else "scan/mesh (NoScan - for information only)"
         else:
             for p in (fit_pts or []):
                 tp = v_sub(T(p), ox)

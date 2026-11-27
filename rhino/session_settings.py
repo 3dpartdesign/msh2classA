@@ -21,6 +21,7 @@ OPT_LISTS = [
 OPT_TOGGLES = [   # (name, sticky key, default)
     ("SeamLabels", "labels", True),
     ("SideLenHint", "sidehint", True),
+    ("Sweep", "sweep", False),
 ]
 
 
@@ -44,7 +45,7 @@ class SettingsMixin(object):
             ui[nm] = ("tog", key, o)
         fm_ = getattr(self, "fillet_mode", None)
         if self.corners:
-            gp.AddOption("UndoPt"); gp.AddOption("ClearSrf")
+            gp.AddOption("UndoPt"); gp.AddOption("ClearPts")
         elif fm_ and (fm_["pts"] or fm_.get("ptsA")):
             gp.AddOption("UndoPt")
         if self.patches: gp.AddOption("UndoSrf")
@@ -62,12 +63,14 @@ class SettingsMixin(object):
         if name == "UndoPt":
             if getattr(self, "fillet_mode", None): self.fillet_undo_pt()
             else: self.undo()
-        elif name == "ClearSrf": self.reset_polygon()
+        elif name == "ClearPts": self.reset_polygon()
         elif name == "UndoSrf": self.undo_patch()
         elif name == "UndoSrfEdit": self.undo_smooth()
         elif name == "Help": print(HELP)
 
     def s_sidehint(self): return bool(opt_get("sidehint", True))
+
+    def s_sweep(self): return bool(opt_get("sweep", False))
 
     def s_fit(self): return opt_get("fit", "Mesh")
 
