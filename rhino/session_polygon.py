@@ -356,8 +356,6 @@ class PolygonMixin(object):
         while True:
             gp = ric.GetPoint()
             gp.SetCommandPrompt(self.prompt())
-            try: gp.Constrain(self.mesh, False)     # Rhino's own fast pick on the scan
-            except Exception: pass
             gp.AcceptNothing(True)
             ui = self.add_options(gp)
             self.down = None
@@ -370,7 +368,7 @@ class PolygonMixin(object):
             scan_tools_ready(not self.corners and not getattr(self, "match_mode", None)
                              and not getattr(self, "edge_mode", None) and not getattr(self, "fillet_mode", None))
             try:
-                res = gp.Get()
+                res = click_get(gp, False)          # the ONE click function (mouse down here, as always)
             finally:
                 scan_tools_ready(False)
             self.hover = None
@@ -448,7 +446,7 @@ class PolygonMixin(object):
                 else:
                     vp = gp.View().ActiveViewport
                     sx, sy = to_screen(xf_tuple(vp), T(gp.Point()))
-                pt = gp.Point()
+                pt = self.mesh_at_click(gp)             # None: the scan/mesh is not under the cursor
                 m = xf_tuple(vp)
                 bh = self.bubble_at(m, sx, sy)
                 if bh is not None:
@@ -474,6 +472,8 @@ class PolygonMixin(object):
                         except Exception:
                             print("[{}] failed:".format(btn[1].upper())); print(traceback.format_exc())
                         continue
+                if pt is None and not hits:
+                    print("  click ON the scan/mesh (or on an edge / curve)"); continue
                 if len(self.corners) == 4:
                     if hits:
                         print("  Side 4 closes at corner 1 - click on scan/mesh to bend it, right click = build.")
@@ -497,21 +497,23 @@ class PolygonMixin(object):
 
     def collect_fit_points(self):
         self.fit_pts = []
+        self.hint = None                 # no SideLenHint now: the patch goes through these points (follows_scan)
         while True:
             gp = ric.GetPoint()
             gp.SetCommandPrompt("Fit point {} (Enter = build, Undo)".format(len(self.fit_pts) + 1))
-            try: gp.Constrain(self.mesh, False)
-            except Exception: pass
             gp.AcceptNothing(True)
             if self.fit_pts: gp.AddOption("UndoPt")
             gp.DynamicDraw += self.on_draw
             gp.MouseMove += self.on_move_view
             gp.MouseDown += self.on_down
-            res = gp.Get()
+            res = click_get(gp, False)
             if res == Rhino.Input.GetResult.Point:
                 if self.click_view_button():
                     continue
-                self.fit_pts.append(gp.Point()); continue
+                q = self.mesh_at_click(gp)
+                if q is None:
+                    print("  click ON the scan/mesh"); continue
+                self.fit_pts.append(q); continue
             if res == Rhino.Input.GetResult.Option:
                 if self.fit_pts: self.fit_pts.pop()
                 continue

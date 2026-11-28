@@ -169,6 +169,7 @@ def load_photos():
     files = rs.OpenFileNames("Load photos (front / rear / side / top)",
                              "Photos (*.jpg;*.jpeg;*.png)|*.jpg;*.jpeg;*.png|All files (*.*)|*.*||")
     if not files: return
+    old_layer = sc.doc.Layers.CurrentLayerIndex      # back at the end: never a photo layer for what you draw next
     root = ensure_layer(PHOTO_ROOT)
     made = 0
     for path in files:
@@ -203,7 +204,8 @@ def load_photos():
         sc.doc.Objects.ModifyAttributes(obj, a, True)
         made += 1
         print("[LoadPhotos] {} ({} x {} px) as the {} photo".format(name, wh[0], wh[1], role))
-    sc.doc.Layers.SetCurrentLayerIndex(root, True)
+    try: sc.doc.Layers.SetCurrentLayerIndex(old_layer, True)
+    except Exception: sc.doc.Layers.SetCurrentLayerIndex(root, True)
     sc.doc.Views.Redraw()
     if made:
         refresh_layer_panel()

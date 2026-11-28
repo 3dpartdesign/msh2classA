@@ -11,6 +11,7 @@ import traceback
 from .vectors import v_add, v_dist, v_dot, v_mul, v_sub
 from .evaluate import srf_coefs, srf_derivs, srf_point
 from .lsq import LSQ
+from .bspline import BDir
 # <<< dev-only
 # =============================================================================
 # PATCH FITTING WITH G0 / G1 / G2 CONSTRAINTS
@@ -54,6 +55,37 @@ def fit_to_function(du, dv, fn):
     for i in range(du.n * dv.n):
         L.add([(i, 1.0)], (0.0, 0.0, 0.0), 1e-12)
     return L.solve()[0]
+
+
+def rebuild_fit(fn, nu=6, nv=6, edge_w=1e3, n_dev=25):
+    """Rebuild: a clean single-span patch of nu x nv CV on the surface fn(u, v)
+    (u, v 0..1 - e.g. a 20x20 CV, multi-span or rational surface): its 4
+    corners exactly, its 4 edges closely (so the neighbours' seams stay), the
+    inside by least squares, the CV net faired a little.
+    -> (P, deviation inside, deviation on the edges) - at the same (u, v)."""
+    du = BDir(nu - 1, 1); dv = BDir(nv - 1, 1)
+    prob = FitProblem(du, dv, fit_to_function(du, dv, fn))
+    for (u, v) in ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)):
+        prob.hard.append((u, v, fn(u, v)))
+    K = 4 * max(nu, nv) + 4
+    for k in range(4):
+        uvf = SIDE_MAP[k][0]
+        for i in range(K):
+            u, v = uvf(i / float(K - 1))
+            prob.soft.append((u, v, fn(u, v), edge_w))
+    ns_ = 4 * max(nu, nv) + 6
+    data = [(i / (ns_ - 1.0), j / (ns_ - 1.0)) for i in range(ns_) for j in range(ns_)]
+    data = [(u, v, fn(u, v), 1.0) for (u, v) in data]
+    P = run_fit(prob, lambda P_: data, 2)
+    dev = 0.0; dev_e = 0.0
+    for i in range(n_dev):
+        for j in range(n_dev):
+            u, v = i / (n_dev - 1.0), j / (n_dev - 1.0)
+            d = v_dist(srf_point(du, dv, P, u, v), fn(u, v))
+            dev = max(dev, d)
+            if i in (0, n_dev - 1) or j in (0, n_dev - 1):
+                dev_e = max(dev_e, d)
+    return P, dev, dev_e
 
 
 class Cont(object):

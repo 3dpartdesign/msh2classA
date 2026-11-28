@@ -344,6 +344,15 @@ class _Objects(object):
         oid = o.Id if hasattr(o, "Id") else o
         self.items[oid].Attributes = a.Duplicate(); return True
     def Delete(self, i, q): self.items.pop(i, None); return True
+    def Hide(self, i, q):
+        o = self.items.get(i)
+        if o is None or not o.Visible: return False
+        o.Visible = False; return True
+    def Show(self, i, q):
+        o = self.items.get(i)
+        if o is None: return False
+        o.Visible = True; return True
+    def GetSelectedObjects(self, a, b): return [o for o in self.items.values() if getattr(o, "selected", False)]
 
 
 class _IDefs(list):
@@ -543,9 +552,13 @@ class GetObject(object):
     def AddOption(self, n): self.opts.append(n); return len(self.opts)
     def AddOptionList(self, n, items, i): self.opts.append(n); return len(self.opts)
     def Option(self): return self._opt
+    def AcceptNothing(self, b): self.nothing_ok = b
     def Get(self):
         act = SCRIPT.pop("pick")
         if act[0] == "esc": return GetResult.Cancel
+        if act[0] == "obj_enter":
+            if not getattr(self, "nothing_ok", False): raise RuntimeError("Enter not accepted at %r" % self.prompt)
+            return GetResult.Nothing
         if act[0] == "opt":
             if act[1] not in self.opts:
                 raise RuntimeError("option %r not offered at %r (%s)" % (act[1], self.prompt, self.opts))

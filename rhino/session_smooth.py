@@ -18,12 +18,23 @@ SRF_ROWS = ((("even", "EvenUV"), ("straight", "StrUV"), ("relax", "RelaxUV")),
             (("todev", "ToDevUV"), ("match", "MatchUVN"), ("edge", "FreeEdgeEdt"), ("del", "Del")))
 
 
-def srf_button_rects(cx, cy):
+# a surface that can not take part (several spans, rational, over 8 CV; untrimmed): only these
+SRF_ROWS_REBUILD = ((("rebuild", "Rebuild"), ("del", "Del")),)
+REBUILD_CV = 6                   # Rebuild / RebuildAll: CV per direction of the clean patch
+
+
+def dot_half_width(text):
+    """Half the width (px) of a DrawDot with this text - for every clickable dot (patch buttons,
+    MatchUVN bubbles): what is drawn is what is clicked."""
+    return 3.5 * len(text) + 9
+
+
+def srf_button_rects(cx, cy, rows=SRF_ROWS):
     """[(mode, label, centre x, centre y, half width)] around the patch centre."""
     out = []; H = 22
-    y0 = cy - H * (len(SRF_ROWS) - 1) / 2.0
-    for r, row in enumerate(SRF_ROWS):
-        ws = [3.5 * len(lb) + 9 for (_, lb) in row]
+    y0 = cy - H * (len(rows) - 1) / 2.0
+    for r, row in enumerate(rows):
+        ws = [dot_half_width(lb) for (_, lb) in row]
         total = sum(2 * w for w in ws) + 8 * (len(row) - 1)
         x = cx - total / 2.0
         for (mode, lb), w in zip(row, ws):
@@ -87,11 +98,29 @@ class SmoothMixin(object):
                     cache[oid] = f.PointAt(f.Domain(0).Mid, f.Domain(1).Mid)
         return cache.get(oid)
 
+    def srf_rows(self, oid, ok):
+        """The buttons a surface gets: all (it takes part), Rebuild + Del (it
+        can not: several spans, rational, over 8 CV), none (trimmed - an
+        NPatch, or a trimmed surface: Rebuild would bring back what was cut)."""
+        if ok: return SRF_ROWS
+        return SRF_ROWS_REBUILD if self.can_rebuild(oid) else ()
+
+    def can_rebuild(self, oid):
+        for (sid, brep, bb, ok) in self.surfs:
+            if sid == oid:
+                try:
+                    return (not ok) and brep.IsSurface and not rs.GetUserText(oid, NPATCH_KEY)
+                except Exception:
+                    return False
+        return False
+
     def _btn_under(self, m, sx, sy):
         hs = self.hover_srf
-        if hs is None or not hs[2]: return None
+        if hs is None: return None
+        rows = self.srf_rows(hs[0], hs[2])
+        if not rows: return None
         cx, cy = to_screen(m, T(hs[1]))
-        for (mode, label, x, y, w) in srf_button_rects(cx, cy):
+        for (mode, label, x, y, w) in srf_button_rects(cx, cy, rows):
             if abs(sx - x) < w and abs(sy - y) < 10:
                 return mode
         return None
@@ -142,7 +171,17 @@ class SmoothMixin(object):
                 isnp = bool(rs.GetUserText(hs[0], NPATCH_KEY))
             except Exception:
                 isnp = False
-            d.DrawDot(hs[1], "NPatch" if isnp else "trimmed / multi-span", C_GRAY, col(255, 255, 255))
+            rows = self.srf_rows(hs[0], False)
+            if not rows:
+                d.DrawDot(hs[1], "NPatch" if isnp else "trimmed - can not be changed", C_GRAY, col(255, 255, 255))
+                return
+            d.DrawDot(float(cx), float(cy - 24), "can not take part (several spans / rational / over 8 CV)",
+                      C_GRAY, col(255, 255, 255))
+            for (mode, label, x, y, w) in srf_button_rects(cx, cy, rows):
+                hot = hs[3] == mode
+                bg = C_HOVER if hot else (col(255, 222, 110) if mode == "rebuild" else col(80, 80, 80))
+                fg = col(255, 255, 255) if (mode == "del" and not hot) else col(0, 0, 0)
+                d.DrawDot(float(x), float(y), label, bg, fg)
             return
         qs = self.patch_quality(hs[0])
         colours = {"green": col(150, 225, 150), "yellow": col(255, 222, 110), "red": col(245, 110, 110)}
@@ -171,9 +210,10 @@ class SmoothMixin(object):
                 cand.append((oid, brep, ok))
         if not cand:
             return None
-        res = vp.GetFrustumLine(sx, sy)
-        line = res[1] if isinstance(res, tuple) else res
-        lc = rg.LineCurve(line)
+        ray = cursor_ray(vp, None, rg.Point2d(sx, sy))     # the ONE cursor ray (window point -> frustum line)
+        if ray is None:
+            return None
+        lc = rg.LineCurve(ray[0], ray[0] + ray[1])
         cam = vp.CameraLocation
         best = None
         for (oid, brep, ok) in cand:
@@ -198,6 +238,8 @@ class SmoothMixin(object):
             return self.enter_edge(oid)
         if mode == "del":
             return self.delete_patch(oid)
+        if mode == "rebuild":
+            return self.rebuild_one(oid)
         if mode == "reset":
             return self.reset_patch(oid)
         tag = {"smooth": "[SmthUVN]", "fair": "[FairN]", "pull": "[PullN]"}[mode]
@@ -443,25 +485,45 @@ class SmoothMixin(object):
         except Exception:
             pass
 
+    def _match_text(self, it):
+        return u"{}{} \u25BC  (now {}{})".format("mirror " if it["key"][0] == "mirror" else "",
+                                                  LEVEL_NAME[it["want"]], it["now"],
+                                                  ", " + it["src"] if it.get("src") else "")
+
     def _match_rects(self, m):
+        """(kind, n, x, y, half width) of every MatchUVN bubble - drawn AND
+        clicked by this one list, so the click area is the bubble itself."""
         mm = self.match_mode
         out = []
         for n, it in enumerate(mm["items"]):
             x, y = to_screen(m, T(it["pos"]))
-            out.append(("seam", n, x, y, 70))
+            out.append(("seam", n, x, y, dot_half_width(self._match_text(it))))
         c = mm.get("centre")
         if c is not None:
             cx, cy = to_screen(m, T(c))
-            out.append(("apply", None, cx - 40, cy, 30))
-            out.append(("cancel", None, cx + 40, cy, 32))
+            out.append(("apply", None, cx - 40, cy, dot_half_width("Apply")))
+            out.append(("cancel", None, cx + 40, cy, dot_half_width("Cancel")))
         return out
+
+    def label_free(self, vp):
+        """-> f(point): may a label be drawn there? Not under a MatchUVN bubble."""
+        mm = getattr(self, "match_mode", None)
+        if not mm:
+            return lambda p: True
+        m = xf_tuple(vp)
+        rects = self._match_rects(m)
+
+        def f(p):
+            x, y = to_screen(m, T(p))
+            return not any(abs(x - rx) < w + 40 and abs(y - ry) < 20 for (_, _, rx, ry, w) in rects)
+        return f
 
     def _match_under(self, m, sx, sy):
         """Nearest Match bubble / Apply / Cancel to the click (a bit generous:
         the bubbles sit on top of seam labels and are easy to miss)."""
         best = None
         for (kind, n, x, y, w) in self._match_rects(m):
-            if abs(sx - x) < w + 6 and abs(sy - y) < 16:
+            if abs(sx - x) < w + 4 and abs(sy - y) < 13:
                 d = abs(sy - y) * 3.0 + abs(sx - x)
                 if best is None or d < best[0]: best = (d, (kind, n))
         return None if best is None else best[1]
@@ -511,9 +573,7 @@ class SmoothMixin(object):
         for (kind, n, x, y, w) in self._match_rects(m):
             if kind == "seam":
                 it = mm["items"][n]
-                txt = u"{}{} \u25BC  (now {}{})".format("mirror " if it["key"][0] == "mirror" else "",
-                                                          LEVEL_NAME[it["want"]], it["now"],
-                                                          ", " + it["src"] if it.get("src") else "")
+                txt = self._match_text(it)
                 bg = C_HOVER if hot == ("seam", n) else col(120, 220, 120)
             else:
                 txt = "Apply" if kind == "apply" else "Cancel"
@@ -932,6 +992,91 @@ class SmoothMixin(object):
         for (u, v, q) in self.scan_samples(p, P, ox, 9):
             dmax = max(dmax, v_dist(srf_point(p.du, p.dv, P, u, v), q))
         return dmax
+
+    def rebuild_surface(self, oid):
+        """THE rebuild (Rebuild button and RebuildAll): surface oid -> a clean
+        single-span REBUILD_CV x REBUILD_CV patch on it (rebuild_fit), the same
+        object (attributes, layer) - one undo entry. -> (undo entry,
+        deviation, deviation on the edges, old CV count) or None."""
+        for (sid, brep, bb, ok) in self.surfs:
+            if sid == oid: break
+        else:
+            return None
+        if not self.can_rebuild(oid):
+            return None
+        obj = sc.doc.Objects.FindId(oid)
+        if obj is None: return None
+        ns = brep.Faces[0].UnderlyingSurface().ToNurbsSurface()
+        old = "{}x{} CV{}{}".format(ns.Points.CountU, ns.Points.CountV,
+                                    ", {}x{} spans".format(ns.SpanCount(0), ns.SpanCount(1))
+                                    if ns.SpanCount(0) > 1 or ns.SpanCount(1) > 1 else "",
+                                    ", rational" if ns.IsRational else "")
+        ox = tuple(0.5 * (bb[0][c] + bb[1][c]) for c in range(3))
+        d0, d1 = ns.Domain(0), ns.Domain(1)
+
+        def fn(u, v):
+            return v_sub(T(ns.PointAt(d0.ParameterAt(u), d1.ParameterAt(v))), ox)
+        P, dev, dev_e = rebuild_fit(fn, REBUILD_CV, REBUILD_CV)
+        du = BDir(REBUILD_CV - 1, 1); dv = BDir(REBUILD_CV - 1, 1)
+        new = make_nurbs(du, dv, P, ox)
+        if new is None or not new.IsValid:
+            return None
+        try:
+            if obj.GripsOn: obj.GripsOn = False
+        except Exception:
+            pass
+        entry = (oid, obj.Geometry.Duplicate())
+        sc.doc.Objects.Replace(oid, new.ToBrep() if isinstance(obj.Geometry, rg.Brep) else new)
+        try:                             # (no msh2classA_fit: it has no stored G levels - an UndoSrfEdit leaves no tag)
+            rs.SetUserText(oid, "msh2classA_side", str(self.scan_side_sign(new)))
+        except Exception:
+            pass
+        return entry, dev, dev_e, old
+
+    def rebuild_note(self, dev, dev_e):
+        if dev <= self.s_tol():
+            return "off the old surface by {} (edges {})".format(fl(dev), fl(dev_e))
+        return ("off the old surface by {} (edges {}) - MORE than MeshTol: {} CV can not carry its shape "
+                "(UndoSrfEdit, or draw new patches over it)".format(fl(dev), fl(dev_e), REBUILD_CV))
+
+    def rebuild_one(self, oid):
+        """Rebuild (button on a surface that can not take part)."""
+        r = self.rebuild_surface(oid)
+        if r is None:
+            print("[Rebuild] this surface can not be rebuilt (trimmed: the part cut away would come back)"); return
+        entry, dev, dev_e, old = r
+        self.smooth_undo.append([entry])
+        self.refresh(); sc.doc.Views.Redraw()
+        print("[Rebuild] {} -> one clean {}x{} CV patch, {}. It takes part now: MatchUVN brings its seams "
+              "to G1 / G2. UndoSrfEdit = back".format(old, REBUILD_CV, REBUILD_CV, self.rebuild_note(dev, dev_e)))
+        self.flash("Rebuild: {}x{} CV, off by {}".format(REBUILD_CV, REBUILD_CV, fl(dev)), oid, 6.0)
+
+    def rebuild_all(self):
+        """RebuildAll (Surfaces group): every visible surface near the scan/mesh
+        that can not take part (several spans, rational, over 8 CV; not
+        trimmed) is rebuilt like Rebuild - one UndoSrfEdit for all."""
+        tag = "[RebuildAll]"
+        todo = [sid for (sid, brep, bb, ok) in self.surfs if self.can_rebuild(sid)]
+        if not todo:
+            print(tag + " nothing to rebuild: every surface near the scan/mesh takes part (or is trimmed)"); return
+        busy = show_busy("RebuildAll...")
+        step = []; worst = 0.0
+        try:
+            for k, sid in enumerate(todo):
+                r = self.rebuild_surface(sid)
+                if r is None:
+                    print("  {}: can not be rebuilt".format(k + 1)); continue
+                entry, dev, dev_e, old = r
+                step.append(entry); worst = max(worst, dev)
+                print("  {}: {} -> {}x{} CV, {}".format(k + 1, old, REBUILD_CV, REBUILD_CV, self.rebuild_note(dev, dev_e)))
+        finally:
+            hide_busy(busy)
+        if step:
+            self.smooth_undo.append(step)
+        self.refresh(); sc.doc.Views.Redraw()
+        print(tag + " {} surface(s) rebuilt, worst {} - they take part now (MatchUVN brings their seams to G1 / G2). "
+              "One UndoSrfEdit = all back".format(len(step), fl(worst)))
+        self.flash("RebuildAll: {} surface(s), worst {}".format(len(step), fl(worst)), None, 8.0)
 
     def delete_patch(self, oid):
         """Del: the patch is deleted (UndoSrfEdit brings it back). Its
@@ -1678,6 +1823,8 @@ class SmoothMixin(object):
             self.enter_npatch(None)
         elif nm == "GlobalMatch":
             self.global_match()
+        elif nm == "RebuildAll":
+            self.rebuild_all()
         elif nm == "ForceMirror":
             self.force_mirror()
         sc.doc.Views.Redraw()

@@ -1,5 +1,75 @@
 # Changes
 
+## 0.1.3-alpha - 2026-11-28
+
+In short (Rhino; details below):
+- **One click function for the whole plugin**: no more "no entry" cursor while drawing patches, between patches
+  or when scrolling, and the CV points show over patches in the air. Code rules in `DEVNOTES.md`, checked by
+  `tests/test_rules.py`.
+- Patches: the scan/mesh is found only straight UNDER the patch (no pull sideways to the rim of a hole), the
+  mirror side held on its curve, a warning when the CV net folds, never on a scan/mesh or photo layer.
+- New: **Rebuild / RebuildAll** (a 20x20 CV or rational surface -> one clean 6x6 CV patch that takes part),
+  a list of the surfaces that take part at the start, coloured bubbles at the cursor in MeshAlign.
+- Names: **FitInSpheres / SphereRadius / ShowSpheres** everywhere (were Fit, AutoFit, AutoFitRadius,
+  SpherePreview). MatchUVN readable, SideLenHint only where it means something.
+
+### Rhino - clicks
+- **The "no entry" cursor while drawing patches** (also waiting for the next patch and when scrolling): the patch
+  clicks and the TempPts points still stuck the cursor to the scan/mesh (`Constrain(mesh)`) - Rhino shows the
+  no-entry cursor off it and gives no mouse point, so the hover, the CV points and Graph stopped. Now EVERY click
+  of the plugin goes through one function (`click_get`): the camera-facing click plane, kept up to date with the
+  view; the point on the scan/mesh comes from one cursor ray (`cursor_ray` + `mesh_ray_point`), also for the hover
+  and for the patch under the cursor. "click ON the scan/mesh" when the cursor is beside it.
+- `DEVNOTES.md`: one job = one shared function, the list of them. `tests/test_rules.py` fails when code clicks,
+  constrains or makes a cursor ray outside them.
+
+### Rhino - patches
+- **Pulled sideways over a hole** (CVs dragged down to the sill under a window): the scan/mesh point for a patch
+  point was the NEAREST one on a face turned the same way - over a hole that is its rim, beside the patch. Now
+  (`scan_pt`, the one function of the build, PullN, the deviation and the start surface) only a point straight
+  under it along the normal counts; beside it only a ray along the normal may find the scan/mesh (within reach),
+  else nothing - the Sweep shape / fairing holds the patch there. The build says how many samples had none.
+- **The mirror side left its own curve** (bad_patch.stp: two CVs of the mirror edge fell together, 88 mm then
+  1 mm, and the next column made a 30 mm peak): the mirror side was held only softly, like a side on the
+  scan/mesh. Now it is held on its curve (flattened onto the plane) like every drawn curve - in every FitSrfTo,
+  also a Sweep side on the mirror.
+- **A warning when the CV net folds** (a CV jumped over its neighbour) after every build: which side, how many rows.
+- **Never on a scan/mesh or photo layer**: new patches go to the current layer - if that is a scan/mesh or photo
+  layer, to `Patches- Msh2classA` (said once). LoadPhotos left the photo layer current (the next patches went
+  there): it gives back the layer it found. Photos (flat surfaces) and everything on those layers no longer take
+  part in the patches.
+- **Which surfaces take part** - said at the start of every run: every visible surface near the scan/mesh on any
+  other layer; msh2classA patches, other single-span ones (they take part fully, GlobalMatch leaves their seams),
+  ones that can not be changed (only their edges are used); hide / lock a layer to keep them out.
+- **New: Rebuild** (button on a surface that can not take part: several spans, rational, over 8 CV; untrimmed) and
+  **RebuildAll** (Surfaces): one clean 6x6 CV patch on it - corners exact, edges close, the deviation printed
+  (warned above MeshTol), the same object; UndoSrfEdit = back (RebuildAll: one step for all). Trimmed ones and
+  NPatches are left.
+- **MatchUVN**: the seam bubble had the edge hover ('Edge') and the seam marker on top of it and did not take the
+  click. In MatchUVN there is no edge hover, labels under its bubbles are not drawn, and the click area is the
+  bubble (from the text drawn, like the patch buttons).
+- **SideLenHint** ('too complex', 'bends') only with FitSrfTo=WholeMesh: with TempPts / NoScan the patch does not
+  follow the scan/mesh, the red 'too complex' was misleading.
+
+### Rhino - scan/mesh tools
+- **MeshAlign: a coloured bubble at the cursor** - "Pair 1: point on the scan/mesh that STAYS (turns RED)", then
+  "SAME point on the scan/mesh that MOVES (turns GREEN)", in those colours; there at once, not only after the mouse
+  moves. One function for any tool (`click_get(gp, tip=...)`).
+- **MeshAlign with many scan/meshes**: every visible one takes part (each is prepared for clicking, slow the first
+  time). With more than 2 visible and some not prepared it asks first: Enter = go on with all, Esc = stop and
+  hide the ones not needed. It never hides one itself.
+- **FitInSpheres** is the one name of what was Fit (MeshAlign, MeshAutoAlign, the Fine gumball) and AutoFit
+  (MeshCenter) - the same thing everywhere: pulled on by the shape, only inside the spheres. Options
+  *SphereRadius* (was AutoFitRadius) and *ShowSpheres* (was SpherePreview). Help: MeshAlign = one onto one by your
+  pairs, MeshAutoAlign = many together.
+
+### Core
+- `patch_fit.rebuild_fit`: a clean single-span patch on any surface given as a function (Rebuild).
+
+### Tests
+- New: test_rules, test_click, test_under, test_mirror_side, test_report, test_rebuild, test_tip, test_align_ask,
+  test_layers, test_match_ui, test_hint_mode. The bench (fakerhino) got Hide / Show / selection / GetObject Enter.
+
 ## 0.1.2-alpha - 2026-11-27
 
 In short (Rhino; details below):
@@ -55,8 +125,9 @@ In short (Rhino; details below):
   3 sides: side 4 = side 2 carried onto corners 4 -> 1. 2 sides: side 1 = profile, side 2 = rail; side 3 = the
   profile carried along the rail (turning with it), side 4 = the path of corner 1, corner 4 made. A made side on
   the symmetry plane is a mirror side (G0/G1/G2 to its mirror image). Each made side takes the rows (CV count)
-  of its opposite side. Fit: the scan/mesh where it is (hits through the hole dropped, also for the start),
-  the Sweep shape where not; the CV count from the rows (no raise, no AutoSplit).
+  of its opposite side. Fit, in every FitSrfTo: WholeMesh = the scan/mesh where it is (hits through the hole
+  dropped, also for the start), the Sweep shape where not; TempPts = through the points, the Sweep shape
+  elsewhere (softly); NoScan = the Sweep shape. The CV count from the rows (no raise, no AutoSplit).
 - tests/test_sweep.py: the made sides (straight and curved rail, at the mirror, 3 sides). The whole patch
   build is NOT tested outside Rhino.
 

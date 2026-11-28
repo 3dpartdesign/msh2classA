@@ -4,7 +4,7 @@
 FreeCAD versions. The Rhino build keeps its own copies (rhino/header.py,
 rhino/panels.py); tools/build.py checks that they are the same."""
 
-VERSION = "msh2classA 0.1.2-alpha"
+VERSION = "msh2classA 0.1.3-alpha"
 LEGAL_LINE = ("msh2classA (C) 2026 3dPARTdesign - https://3dPARTdesign.com - "
               "free software under GPL-3.0 (see LICENSE, NOTICE), WITHOUT ANY WARRANTY")
 EXPERIMENTAL = "EXPERIMENTAL - NOT TESTED YET. Check every result before you use it."

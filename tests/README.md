@@ -25,7 +25,7 @@ place and angle:
 - setups 'front' / 'rear' (two centres) switched back and forth stay exact
 - an Align that would make a loop is refused, nothing moves
 - Esc / Cancel / UndoPair / UndoPt bring everything back exactly
-- Fit (Align) and AutoFit (Center) from clicks 6-8 mm off must end within 0.5 mm
+- FitInSpheres (Align and Center) from clicks 6-8 mm off must end within 0.5 mm
 - a scan loaded later and aligned: the saved setups learn where it goes
 - setups across programs: inch Rhino <-> mm Blender / FreeCAD, and old setups without units
 
@@ -44,3 +44,18 @@ setup file). Takes about 20 minutes.
     python tests/test_entry.py      # start: DrawPatches, click, BackToPatches after a tool, Esc
     python tests/test_sweep.py      # Sweep: the sides made from 2 or 3 drawn ones
 
+## Short tests (seconds each)
+
+    python tests/test_rules.py        # code rules (DEVNOTES.md): clicks only through click_get, no other cursor ray
+    python tests/test_click.py        # the one cursor ray: in front of / behind the click plane, parallel view, beside
+    python tests/test_under.py        # the scan/mesh only straight under a patch point - never the rim of a hole
+    python tests/test_mirror_side.py  # the mirror side stays on its curve, the CV net does not fold
+    python tests/test_rebuild.py      # Rebuild / RebuildAll: 20x20 CV -> 6x6, deviation, undo, buttons
+    python tests/test_tip.py          # the bubble at the cursor in MeshAlign: text, colour, at once
+    python tests/test_align_ask.py    # MeshAlign asks with many visible, never hides one itself
+    python tests/test_layers.py       # no patch on a scan/mesh or photo layer, LoadPhotos keeps the current layer
+    python tests/test_report.py       # the list of the surfaces that take part
+    python tests/test_match_ui.py     # MatchUVN: only its bubble on the seam, the whole bubble takes the click
+    python tests/test_hint_mode.py    # SideLenHint only with FitSrfTo=WholeMesh
+    python tests/test_entry.py        # the start (panel, Draw patches / Back to the patches)
+    python tests/test_sweep.py        # Sweep sides

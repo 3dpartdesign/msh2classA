@@ -23,6 +23,23 @@ msh2classA - how it works
            an edge do not turn that side into a scan/mesh side. Narrow
            blend: click its 4 corners = the 4 corners of the two
            patches, both long sides then follow the edges.
+  SURFACES THAT TAKE PART  every VISIBLE surface near the scan/mesh, on
+           any layer but the scan/mesh and photo layers (new patches go to
+           the CURRENT layer - if that is a scan/mesh or photo layer, to
+           'Patches- Msh2classA'; the start of each run says how many and
+           which layers):
+             msh2classA patches: everything (their G levels are stored).
+             other single-span surfaces (up to 8x8 CV, untrimmed, not
+               rational): new patches match them, a neighbour's buttons
+               may move their CVs; no stored G levels: GlobalMatch leaves
+               their seams.
+             trimmed / several spans / rational / over 8 CV (e.g. 20x20):
+               never changed, only their EDGES are used - a bad edge gives
+               a bad seam. Untrimmed ones: button Rebuild on it (or
+               RebuildAll) = one clean 6x6 CV patch on it, then it takes
+               part.
+           Keep surfaces out: HIDE their layer before msh2classA. LOCKED:
+           only their edges are used, never changed.
   SWEEP    (option Sweep=On) where the scan/mesh has a hole (a window,
            a missing part): draw only 2 or 3 sides, the rest is made like
            Rhino's Sweep1 - no scan/mesh under them:
@@ -35,8 +52,10 @@ msh2classA - how it works
                MIRROR side (G0/G1/G2 to its mirror image): half a window
                to the mirror line, ForceMirror not needed.
            Each made side takes the rows (G0 / G1 / G2, so the CV count) of
-           its opposite side. Inside: the scan/mesh where there is one
-           (hits through the hole are dropped), the Sweep shape where not.
+           its opposite side. Inside, in every FitSrfTo: WholeMesh = the
+           scan/mesh where there is one (hits through the hole dropped),
+           the Sweep shape where not; TempPts = through your points, the
+           Sweep shape elsewhere; NoScan = the Sweep shape (like Sweep1).
            FreeEdgeEdt can redraw a made side afterwards.
   SIDE BUBBLES  Click: G0 -> G1 -> G2.  On a surface edge = continuity
            to it. On the scan/mesh = rows RESERVED for a future neighbour.
@@ -149,6 +168,8 @@ options
                  how far the scan/mesh turns (4CV max 100 deg, 6CV max 130
                  deg) and that the patch would not wave. From side 3 on
                  the whole patch (inside and both directions) is checked.
+                 Only with FitSrfTo=WholeMesh: with TempPts / NoScan the
+                 patch does not follow the scan/mesh, so it says nothing.
   SCAN/MESH TOOLS (buttons in the small panel - before the scan/mesh is
   picked and while you work on patches: the work waits and comes back with
   the scan/mesh where it is now). They move / turn only the scan/mesh
@@ -181,11 +202,12 @@ options
                  pixel, default 0.02 mm / 0.005 deg); Enter = keep, Esc =
                  undo this Fine round. In Fine r1 = L1 mirrored in the
                  present centre, number = distance to the R1 you clicked.
-                 AutoFit (option): the mirror fitted to the scan/mesh itself,
-                 only inside spheres of AutoFitRadius (default 50 mm) around
-                 the tags (0 = whole scan/mesh); holes and one-sided parts
-                 are left out. SpherePreview = show the spheres.
-                 Pairs first, then Fine / AutoFit as often as you like; after
+                 FitInSpheres (option): the mirror fitted to the scan/mesh
+                 itself BY ITS SHAPE, only inside spheres of SphereRadius
+                 (default 50 mm) around the tags (0 = whole scan/mesh);
+                 holes and one-sided parts are left out. ShowSpheres = show
+                 the spheres. Pairs first, then Fine / FitInSpheres as
+                 often as you like; after
                  that the pairs are LOCKED (ResetFine = back to the pairs).
                  If MeshFloor was done before, Center levels the floor again
                  by itself with the same Floor points - Floor -> Center gives
@@ -218,9 +240,16 @@ options
                  to it before). Then the clicks go only onto the RED / GREEN
                  one (through the other only where both lie on each other,
                  within ~3 mm). 3+ pairs = turned + moved (number = how far
-                 off). Fit = automatic, only inside the AutoFitRadius
-                 spheres around the pairs; Fine = gumball. Right click =
-                 done, Esc = cancel Align (scans/meshes back).
+                 off). FitInSpheres = the GREEN one pulled onto the RED one
+                 BY THEIR SHAPE (your clicks need not be exact), only inside
+                 the SphereRadius spheres around the pairs; Fine = gumball.
+                 Right click = done, Esc = cancel Align (scans/meshes back).
+                 EVERY visible scan/mesh takes part (each is prepared for
+                 clicking: slow the first time with many). With more than 2
+                 visible and some not prepared yet it asks first: Enter = go
+                 on with all, Esc = stop - hide the ones you do not need
+                 (their layers) and start MeshAlign again. Hidden ones that
+                 hang on the moving one still move with it.
                  A tree: aligning a scan/mesh again moves everything hanging
                  on it too; saved setups keep the new alignment.
                  GUARD: a scan/mesh already placed by Center / Floor never
@@ -229,7 +258,7 @@ options
                  (the centre would be lost) - Align the other way: it stays
                  (RED), the other moves and joins the centred set.
                  Scale (option, off by default): the moving scan/mesh also
-                 changes its SIZE (3+ pairs, Fit) - two AI meshes of the
+                 changes its SIZE (3+ pairs, FitInSpheres) - two AI meshes of the
                  same car (Trellis front + rear), photogrammetry without a
                  true size. The factor is shown with the pairs.
                  Every pair leaves a MARKER (its point, kept in the block)
@@ -239,11 +268,15 @@ options
     MeshAutoAlign  many scans/meshes pulled together AT ONCE. Two lists
                  (hidden ones too): 1) which ones MOVE, 2) which ones STAY
                  (e.g. the centred front; preselected: the centred ones).
-                 Spheres of AutoFitRadius at all markers (the Align pairs
+                 Spheres of SphereRadius at all markers (the Align pairs
                  so far) - click more markers on the overlaps if you like
-                 (UndoPt). Fit = every moving one is pulled onto the ones
-                 that stay AND onto the other moving ones, only inside the
-                 spheres (point-to-plane, as AutoFit); Fit again = finer.
+                 (UndoPt). FitInSpheres = the same as in MeshAlign, but for
+                 MANY at once: every moving one is pulled onto the ones that
+                 stay AND onto the other moving ones, all together, only
+                 inside the spheres; FitInSpheres again = finer.
+                 MeshAlign = ONE scan/mesh onto ONE, by your pairs (then
+                 FitInSpheres); MeshAutoAlign = MANY together, no new pairs
+                 needed (they are already roughly in place).
                  The ones that stay never move. Scale (option): each moving
                  one also gets its own size factor. Not on a list: moves with
                  the listed one it hangs on (Align tree). Enter = keep,
@@ -332,6 +365,11 @@ options
            Neighbours with a whole edge on it come to it (DefaultCont).
   GlobalMatch  Seams below their stored level (e.g. after hand edits)
            are brought back; the patch with most broken seams stays.
+  RebuildAll  Every surface near the scan/mesh that can not take part
+           (several spans, rational, over 8 CV - e.g. 20x20 from another
+           program; not trimmed) -> one clean 6x6 CV patch on it, like the
+           Rebuild button on one: corners exact, edges close, the deviation
+           is printed (warned above MeshTol). One UndoSrfEdit = all back.
   ForceMirror  Every patch the mirror plane runs across is cut at it (the
            bigger part stays, no trim); one trimmed at the mirror is rebuilt
            untrimmed. Its side on the plane gets DefaultCont (G2 / G1 / G0).
@@ -343,7 +381,7 @@ options
                  with SrfSplit=AutoSplit is several surfaces) / last
                  patch-button step (FairN, SmthUVN, EvenUV, StrUV, RelaxUV,
                  ToDevUV, PullN, RstN, MatchUVN, FreeEdgeEdt, Fillet, NPatch,
-                 GlobalMatch, Del)
+                 GlobalMatch, Rebuild, RebuildAll, Del)
   Right click with no corners = end msh2classA.  Esc = clear the unfinished patch;
   Esc with nothing started = end msh2classA (finished patches stay in the file).
 ------------------------------------------------------------------"""

@@ -70,6 +70,15 @@ class SettingsMixin(object):
 
     def s_sidehint(self): return bool(opt_get("sidehint", True))
 
+    def follows_scan(self):
+        """Will the patch follow the scan/mesh? Only FitSrfTo=WholeMesh. TempPts goes through your
+        points, NoScan through no scan/mesh at all: whatever measures the scan/mesh for the patch
+        (SideLenHint: 'too complex', 'bends') says nothing then and stays off."""
+        return self.s_fit() == "Mesh"
+
+    def side_hint_on(self):
+        return self.s_sidehint() and self.follows_scan()
+
     def s_sweep(self): return bool(opt_get("sweep", False))
 
     def s_fit(self): return opt_get("fit", "Mesh")

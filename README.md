@@ -31,6 +31,8 @@ All downloads: [Releases](https://github.com/3dpartdesign/msh2classA/releases).
 
 Unzip `msh2classA-rhino-<version>.zip` and keep the files together (the script looks for the `.ini` display mode and the matcap image next to itself). In Rhino: `_-RunPythonScript` and choose `msh2classA.py`. The `Help` option explains everything.
 
+**Which surfaces take part:** every *visible* surface near the scan/mesh, on any layer except the scan/mesh and photo layers (new patches go to the current layer; if that is a scan/mesh or photo layer, to `Patches- Msh2classA`). Single-span surfaces with up to 8x8 CV take part fully, also ones not made by msh2classA: a neighbour's buttons may move their CVs. Trimmed, multi-span or rational ones (e.g. 20x20 CV) are never changed: only their edges are matched, so a bad edge gives a bad seam. The `Rebuild` button on such a surface (or `RebuildAll`) turns an untrimmed one into a clean 6x6 CV patch that takes part. To keep surfaces out, hide their layer before you start; lock it to use only their edges. The start of every run lists what takes part.
+
 ## Repository layout
 
 ```

@@ -29,6 +29,45 @@ class Session(SettingsMixin, ScanMixin, PolygonMixin, DrawMixin, BuildMixin, Smo
         self.fit_pts = []
         self.refresh()
 
+    def surface_report(self):
+        """Which surfaces take part (said at the start of every PATCHES run):
+        EVERY visible surface near the scan/mesh, on any layer - not only the
+        current layer, where the new patches go."""
+        def layer_of(oid):
+            try:
+                o = sc.doc.Objects.FindId(oid)
+                return sc.doc.Layers[o.Attributes.LayerIndex].FullPath
+            except Exception:
+                return "?"
+        mine = []; other = []; fixed = []
+        for (oid, brep, bb, ok) in self.surfs:
+            try: built = rs.GetUserText(oid, "msh2classA_fit") is not None
+            except Exception: built = False
+            (fixed if not ok else mine if built else other).append(oid)
+        try:
+            cur = sc.doc.Layers[sc.doc.Layers.CurrentLayerIndex].FullPath
+            dest = patch_layer(False)[1]
+        except Exception:
+            cur = dest = "?"
+        where = ("the CURRENT layer '{}'".format(cur) if dest == cur else
+                 "'{}' (the current layer '{}' is a scan/mesh or photo layer)".format(dest, cur))
+        print("  New patches go to {}. Every VISIBLE surface near the scan/mesh takes part, on any layer but "
+              "the scan/mesh and photo layers: {} msh2classA patch(es), {} other(s)".format(
+                  where, len(mine), len(other) + len(fixed)))
+        lays = lambda ids: ", ".join(sorted(set(layer_of(i) for i in ids))[:5])
+        if other:
+            print("  [NOTE] {} surface(s) NOT built by msh2classA take part fully (layer: {}) - new patches match them "
+                  "and the buttons of a neighbour may move their CVs (UndoSrfEdit brings them back). They have no "
+                  "stored G levels: GlobalMatch leaves their seams as they are".format(len(other), lays(other)))
+        if fixed:
+            print("  [NOTE] {} surface(s) can not be changed (trimmed, several spans, rational or over 8 CV per "
+                  "direction; layer: {}) - only their EDGES are used: new patches match them as they are, a bad "
+                  "edge gives a bad seam. Rebuild (button on it) / RebuildAll (Surfaces) makes untrimmed ones clean "
+                  "{}x{} CV patches that take part".format(len(fixed), lays(fixed), REBUILD_CV, REBUILD_CV))
+        if other or fixed:
+            print("  To keep surfaces out: HIDE their layer before msh2classA (LOCK it: only their edges are used, "
+                  "never changed)")
+
     def refresh(self):
         self.cands = collect_candidates(self.mesh)
         self.surfs = collect_surfaces(self.mesh)

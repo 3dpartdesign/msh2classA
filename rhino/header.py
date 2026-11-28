@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# msh2classA 0.1.2-alpha   (the version is also in VERSION below and printed at start)
+# msh2classA 0.1.3-alpha   (the version is also in VERSION below and printed at start)
 # Copyright (C) 2026 Marcin Bartoszewski, trading as 3dPARTdesign - https://3dPARTdesign.com
 #
 # This program is free software: you can redistribute it and/or modify it
@@ -29,7 +29,7 @@ in mm and converted; lengths in messages get the decimals the unit needs.
 
 from __future__ import print_function, division
 
-VERSION = "msh2classA 0.1.2-alpha"
+VERSION = "msh2classA 0.1.3-alpha"
 import json
 import math
 import os

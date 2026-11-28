@@ -132,7 +132,14 @@ class Bench(object):
         d = fr.Vector3d(nl); d.Unitize()
         return target + d * L, target - d * L
 
-    def run(self, fn, answers):
+    def run(self, fn, answers, ask_all=True):
+        if fn == "scan_align" and ask_all and self.ns["align_needs_ask"](self.ns["all_scan_insts"]()):
+            # 3+ visible, some not prepared: MeshAlign asks 'all take part?' - Enter (after the answers
+            # to 'moved by hand', which come first)
+            answers = list(answers); k = 0
+            while k < len(answers) and answers[k][0] == "opt" and answers[k][1] in ("Keep", "KeepOnly", "Back"):
+                k += 1
+            answers.insert(k, ("enter",))
         fr.SCRIPT.q = list(answers)
         try:
             self.ns[fn]()
@@ -365,8 +372,8 @@ def s_autoalign():
         xa = fr.Transform(b.xf("A"))
         nudge(b, "B", 0.6, 5.0, 1); nudge(b, "C", 0.8, 7.0, 2)
         e0 = (b.rel_err("A", "B"), b.rel_err("B", "C"))
-        b.run("scan_autoalign", [("multi", ["B", "C"]), ("multi", ["A"]), ("opt", "AutoFitRadius", 150.0),
-                                 ("opt", "Fit"), ("enter",)])
+        b.run("scan_autoalign", [("multi", ["B", "C"]), ("multi", ["A"]), ("opt", "SphereRadius", 150.0),
+                                 ("opt", "FitInSpheres"), ("enter",)])
         e1 = (b.rel_err("A", "B"), b.rel_err("B", "C"))
         check("AutoAlign B + C at once (knocked %.1f / %.1f mm off)" % e0, max(e1) < 0.3, "%.3f / %.3f mm after" % e1)
         check("AutoAlign: A (stays, centred) did not move", float(np.abs(b.xf("A").M - xa.M).max()) < 1e-12)
@@ -393,7 +400,7 @@ def s_autoalign_guard_and_clicks():
         e0 = b.rel_err("A", "D")
         extra = [("click_on", "A", (690, -1110)), ("click_on", "A", (-300, -900))]
         b.run("scan_autoalign", [("multi", ["D"]), ("multi", ["A", "B"])] + extra +
-              [("opt", "AutoFitRadius", 150.0), ("opt", "Fit"), ("opt", "Fit"), ("enter",)])
+              [("opt", "SphereRadius", 150.0), ("opt", "FitInSpheres"), ("opt", "FitInSpheres"), ("enter",)])
         check("AutoAlign D onto A + B with clicked markers (%.1f mm off)" % e0, b.rel_err("A", "D") < 0.3,
               "%.3f mm after" % b.rel_err("A", "D"))
         check("AutoAlign: A, B untouched, centre kept", b.rel_err("A", "B") < TOL and b.sym_err() < TOL)
@@ -401,8 +408,8 @@ def s_autoalign_guard_and_clicks():
         snap = b.snapshot()
         nudge(b, "D", 0.5, 6.0, 5)
         snap2 = b.snapshot()
-        b.run("scan_autoalign", [("multi", ["D"]), ("multi", ["A"]), ("opt", "Fit"), ("esc",)])
-        check("AutoAlign Esc after Fit: back", b.same_as(snap2) < 1e-9)
+        b.run("scan_autoalign", [("multi", ["D"]), ("multi", ["A"]), ("opt", "FitInSpheres"), ("esc",)])
+        check("AutoAlign Esc after FitInSpheres: back", b.same_as(snap2) < 1e-9)
     return f
 
 
@@ -445,7 +452,7 @@ def rel_size(b, a, c):
 
 
 def s_align_scale():
-    """Two AI meshes of the same car, one 8 % too big: Align with Scale (pairs, Fit, AutoAlign)."""
+    """Two AI meshes of the same car, one 8 % too big: Align with Scale (pairs, FitInSpheres, AutoAlign)."""
     def f():
         b = Bench(names=("A", "B"))
         resize(b, "B", 1.08)
@@ -456,15 +463,15 @@ def s_align_scale():
         resize(b2, "B", 0.93)
         rng = np.random.RandomState(4)
         b2.run("scan_align", [("opt", "Scale")] + align_pairs("A", "B", AB, noise=8.0, rng=rng) +
-               [("opt", "AutoFitRadius", 150.0), ("opt", "Fit"), ("enter",)])
-        check("Align Scale=On, rough pairs + Fit", b2.rel_err("A", "B") < 0.05 and abs(rel_size(b2, "A", "B") - 1) < 1e-4,
+               [("opt", "SphereRadius", 150.0), ("opt", "FitInSpheres"), ("enter",)])
+        check("Align Scale=On, rough pairs + FitInSpheres", b2.rel_err("A", "B") < 0.05 and abs(rel_size(b2, "A", "B") - 1) < 1e-4,
               "%.4f mm, size %.6f" % (b2.rel_err("A", "B"), rel_size(b2, "A", "B")))
         b3 = Bench(names=("A", "B"))
         b3.run("scan_align", align_pairs("A", "B", AB) + [("enter",)])
         check("Align Scale=Off (default): size untouched", abs(b3.ns["xf_scale"](b3.xf("B")) - 1.0) < 1e-12)
         resize(b3, "B", 1.04); nudge(b3, "B", 0.4, 4.0, 6)
-        b3.run("scan_autoalign", [("multi", ["B"]), ("multi", ["A"]), ("opt", "Scale"), ("opt", "AutoFitRadius", 150.0),
-                                  ("opt", "Fit"), ("opt", "Fit"), ("enter",)])
+        b3.run("scan_autoalign", [("multi", ["B"]), ("multi", ["A"]), ("opt", "Scale"), ("opt", "SphereRadius", 150.0),
+                                  ("opt", "FitInSpheres"), ("opt", "FitInSpheres"), ("enter",)])
         check("AutoAlign Scale=On: B back on A, size too", b3.rel_err("A", "B") < 0.05 and abs(rel_size(b3, "A", "B") - 1) < 1e-4,
               "%.4f mm, size %.6f" % (b3.rel_err("A", "B"), rel_size(b3, "A", "B")))
         snap = b.snapshot()
@@ -698,23 +705,23 @@ def s_fit(radius=None):
     def f():
         b = Bench()
         rng = np.random.RandomState(4)
-        rad = [("opt", "AutoFitRadius", float(radius))] if radius else []
+        rad = [("opt", "SphereRadius", float(radius))] if radius else []
         b.run("scan_align", align_pairs("A", "B", AB, noise=6.0, rng=rng) + [("enter",)])
         before = b.rel_err("A", "B")
         b.run("scan_align", [("opt", "UndoPair")] * 0 + align_pairs("A", "B", AB, noise=6.0, rng=np.random.RandomState(4)) +
-              rad + [("opt", "Fit"), ("enter",)]) if False else None
+              rad + [("opt", "FitInSpheres"), ("enter",)]) if False else None
         b2 = Bench(); rng = np.random.RandomState(4)
-        b2.run("scan_align", align_pairs("A", "B", AB, noise=6.0, rng=rng) + rad + [("opt", "Fit"), ("enter",)])
-        check("Align Fit, AutoFitRadius %s (pairs 6 mm off: %.1f mm before Fit)" % (radius or "default 50", before),
-              b2.rel_err("A", "B") < 0.5, "%.3f mm after Fit" % b2.rel_err("A", "B"))
+        b2.run("scan_align", align_pairs("A", "B", AB, noise=6.0, rng=rng) + rad + [("opt", "FitInSpheres"), ("enter",)])
+        check("Align FitInSpheres, SphereRadius %s (pairs 6 mm off: %.1f mm before FitInSpheres)" % (radius or "default 50", before),
+              b2.rel_err("A", "B") < 0.5, "%.3f mm after FitInSpheres" % b2.rel_err("A", "B"))
         b3 = Bench(); rng = np.random.RandomState(9)
         noisy = [(a, n, (x + rng.uniform(-8, 8), y)) for (a, n, (x, y)) in CENTER]
         b3.run("scan_center", noisy + [("enter",), ("opt", "DontSave")])
         before = b3.sym_err()
         b4 = Bench()
-        b4.run("scan_center", noisy + rad + [("opt", "AutoFit"), ("enter",), ("opt", "DontSave")])
-        check("Center AutoFit, AutoFitRadius %s (pairs 8 mm off: %.2f mm before)" % (radius or "default 50", before),
-              b4.sym_err() < 0.5, "%.3f mm after AutoFit" % b4.sym_err())
+        b4.run("scan_center", noisy + rad + [("opt", "FitInSpheres"), ("enter",), ("opt", "DontSave")])
+        check("Center FitInSpheres, SphereRadius %s (pairs 8 mm off: %.2f mm before)" % (radius or "default 50", before),
+              b4.sym_err() < 0.5, "%.3f mm after FitInSpheres" % b4.sym_err())
     return f
 
 
@@ -797,8 +804,8 @@ if __name__ == "__main__":
              s_photos())
     scenario("re-Align a mesh that carries another one; refused cycle", s_realign_tree())
     scenario("Esc / Cancel / UndoPair / UndoPt", s_cancel_undo())
-    scenario("Fit and AutoFit with inexact clicks", s_fit())
-    scenario("Fit and AutoFit, bigger spheres", s_fit(300))
+    scenario("FitInSpheres and FitInSpheres with inexact clicks", s_fit())
+    scenario("FitInSpheres and FitInSpheres, bigger spheres", s_fit(300))
     scenario("a scan loaded later + setups", s_setup_with_later_scan())
     scenario("units across programs (inch Rhino <-> mm Blender/FreeCAD)", s_units_cross_program())
     scenario("old setup file without units", s_old_setup_without_units())

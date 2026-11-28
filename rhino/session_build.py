@@ -313,7 +313,10 @@ class BuildMixin(object):
             along_n = (du.n if k % 2 == 0 else dv.n)
             K = max(10, 3 * along_n + 2)
             ts = [i / float(K - 1) for i in range(K)]
-            if s.kind == "scan":
+            # a side on the scan/mesh: softly (the scan/mesh is noisy). The MIRROR side is held ON its
+            # curve (flattened onto the plane) like every drawn curve - softly the scan/mesh points and
+            # the Sweep shape pulled it off its own curve and the next CV column made up for it (a peak)
+            if s.kind == "scan" and k not in self.mirror_sides:
                 for t in ts:
                     u, v = uvf(t)
                     prob.soft.append((u, v, s.fast(t), w_side))
@@ -356,6 +359,15 @@ class BuildMixin(object):
                 if levels[k] >= 2:
                     self.curvature_tip(k, s, du, dv, P0, ox)
 
+        # Sweep: the shape made from the drawn sides, as soft targets where nothing else is (every FitSrfTo)
+        sweep_prior = []; sweep_prior_light = []
+        if sweep_:
+            ng = max(8, 2 * max(du.n, dv.n) + 2)
+            for i in range(ng):
+                for j in range(ng):
+                    u_, v_ = i / float(ng - 1), j / float(ng - 1)
+                    c_ = coons(u_, v_)
+                    sweep_prior.append((u_, v_, c_, 0.3)); sweep_prior_light.append((u_, v_, c_, 0.05))
         if fit_mode == "Mesh":
             nsu = max(14, 3 * du.n + 6); nsv = max(14, 3 * dv.n + 6)
             params = [(i / float(nsu - 1), j / float(nsv - 1)) for i in range(nsu) for j in range(nsv)]
@@ -387,9 +399,9 @@ class BuildMixin(object):
                 return out
             iters = 8
         elif fit_mode == "NoScan":
-            # inside = the smoothest surface the edges and G0/G1/G2 allow
+            # inside = the smoothest surface the edges and G0/G1/G2 allow (Sweep: the Sweep shape)
             prob.w_fair = 0.1
-            data_fn = lambda P: []
+            data_fn = (lambda P: list(sweep_prior)) if sweep_ else (lambda P: [])
             iters = 3
         else:
             # TempPts: through the points, the rest as smooth as the edges allow (a bridge - the scan
@@ -400,7 +412,7 @@ class BuildMixin(object):
             state = {"uv": [None] * len(tp)}
 
             def data_fn(P):
-                out = []
+                out = list(sweep_prior_light) if sweep_ else []      # Sweep: its shape where no point is
                 for i, p in enumerate(tp):
                     u, v = project_param(du, dv, P, p, state["uv"][i])
                     state["uv"][i] = (u, v)
@@ -432,7 +444,12 @@ class BuildMixin(object):
                         ns = rv_; side_ = 1; flipped = True
                 except Exception:
                     pass
-            oid_ = sc.doc.Objects.AddSurface(ns)
+            try:
+                at_ = ro.ObjectAttributes(); li_ = patch_layer()[0]
+                if li_ is not None: at_.LayerIndex = li_
+                oid_ = sc.doc.Objects.AddSurface(ns, at_)     # never onto a scan/mesh or photo layer
+            except Exception:
+                oid_ = sc.doc.Objects.AddSurface(ns)
             ids.append(oid_)
             try:
                 rs.SetUserText(oid_, "msh2classA_fit", fit_mode)
@@ -450,6 +467,7 @@ class BuildMixin(object):
         self.patches.append(ids)
         print("[OK] {} patch(es), {}x{} CV each".format(len(ids), du.p + 1, dv.p + 1))
         self.report(du, dv, P, ox, sides, prob, fit_mode, fit_pts)
+        self.fold_warning(P, du, dv, sides, levels)
         for k in self.mirror_sides:
             uvf, axis, sign = SIDE_MAP[k]
             dmax = tilt = 0.0
@@ -461,6 +479,9 @@ class BuildMixin(object):
                 tilt = max(tilt, math.degrees(math.asin(min(1.0, abs(n[self.mirror_axis])))))
             print("  Side {} mirror {}: off plane {:.5f}  normal tilt to plane {:.3f} deg".format(
                 k + 1, LEVEL_NAME[mirror_lv[k]], dmax, tilt))
+        if getattr(self, "n_side", 0):
+            print("  [INFO] no scan/mesh straight under parts of the patch (a hole, the end of the scan/mesh): not pulled "
+                  "sideways to its rim ({} samples over all iterations)".format(self.n_side))
         if getattr(self, "n_wall", 0):
             print("  [INFO] scan/mesh faces turned away from the patch (walls, ribs, opposite side) were ignored ({} samples over all iterations)".format(self.n_wall))
         if getattr(self, "n_back", 0):
@@ -540,6 +561,27 @@ class BuildMixin(object):
                           1.0 / abs(ks) if abs(ks) > 1e-9 else float("inf"), bump))
         except Exception:
             pass
+
+    def fold_warning(self, P, du, dv, sides, levels):
+        """The CV net FOLDS (a CV jumped over its neighbour in its row or
+        column): the patch is not usable as it is - say where, loudly."""
+        try:
+            val, i, j, d = cv_order_worst(P, du.n, dv.n)
+        except Exception:
+            return
+        if val >= 0.0 or i < 0: return
+        dist = [j, du.n - 1 - i, dv.n - 1 - j, i]            # rows from side 1, 2, 3, 4
+        k = min(range(4), key=lambda q: dist[q])
+        lv = self.raw_side_level(k) if sides[k].kind == "edge" else 0
+        if sides[k].kind == "edge" and lv > 0:
+            print("  [WARN] ******** the patch FOLDS: a CV jumped over its neighbour, {} row(s) from side {} "
+                  "({} to the neighbour patch: what it asks of the rows there cannot be met). UndoSrf, then side {} "
+                  "one step lower in its bubble and build again ********".format(dist[k], k + 1, SIDE_LV_NAME[lv], k + 1))
+        else:
+            print("  [WARN] ******** the patch FOLDS: a CV jumped over its neighbour, {} row(s) from side {}{}. "
+                  "Not a neighbour's G1/G2: the scan/mesh or the side curve there pulls it. Check the scan/mesh near "
+                  "side {}, UndoSrf ********".format(dist[k], k + 1, " (the mirror side)" if k in self.mirror_sides
+                                                   else "", k + 1))
 
     def corner_check(self, sides, levels):
         """Corner k joins side k-1 (its end) and side k (its start)."""

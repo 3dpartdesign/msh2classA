@@ -22,6 +22,46 @@ def in_scan_root(fp, below=False):
     """Layer full path fp is the mesh root (or below it)."""
     return (fp == SCAN_ROOT and not below) or fp.startswith(SCAN_ROOT + "::")
 SCAN_KEY = "msh2classA_scan"          # user text on scan instances (source file)
+PATCH_ROOT = "Patches- Msh2classA"    # new patches when the current layer is a scan/mesh or photo layer
+
+
+def reference_layer(li):
+    """Layer index li is a scan/mesh or photo layer (their roots included):
+    the plugin's reference layers - no patches go there, nothing on them takes
+    part in the patches (a photo is a flat surface too)."""
+    try:
+        fp = sc.doc.Layers[li].FullPath
+    except Exception:
+        return False
+    for root in (SCAN_ROOT, globals().get("PHOTO_ROOT", "Reference Photos- Msh2classA")):
+        if fp == root or fp.startswith(root + "::"):
+            return True
+    return False
+
+
+def on_reference_layer(obj):
+    try: return reference_layer(obj.Attributes.LayerIndex)
+    except Exception: return False
+
+
+_PATCH_LAYER_SAID = [None]
+
+
+def patch_layer(create=True):
+    """THE layer of every new patch: the current layer - unless that is a
+    scan/mesh or photo layer: then PATCH_ROOT (made once, said once).
+    -> (layer index or None if not made yet, full path)."""
+    cur = sc.doc.Layers.CurrentLayerIndex
+    if not reference_layer(cur):
+        return cur, sc.doc.Layers[cur].FullPath
+    li = sc.doc.Layers.FindByFullPath(PATCH_ROOT, -1)
+    if li < 0 and create:
+        li = ensure_layer(PATCH_ROOT)
+    if create and _PATCH_LAYER_SAID[0] != sc.doc.Layers[cur].FullPath:
+        _PATCH_LAYER_SAID[0] = sc.doc.Layers[cur].FullPath
+        print("  [INFO] the current layer '{}' is a scan/mesh or photo layer: new patches go to '{}'".format(
+            sc.doc.Layers[cur].FullPath, PATCH_ROOT))
+    return (li if li >= 0 else None), PATCH_ROOT
 
 
 def scan_palette(n):
@@ -670,6 +710,7 @@ def prefetch_meshes(insts):
 
 
 _RAY_READY = set()
+_PREPARED = set()                # ids of the scan/meshes prepare_scans has done (MeshAlign asks before the rest)
 
 
 def prepare_scans(insts, tool):
@@ -690,12 +731,13 @@ def prepare_scans(insts, tool):
             o = sc.doc.Objects.FindId(o0.Id)
             if o is None or not scan_visible(o): continue
             geo = scan_geo(o)
+            if geo is not None: _PREPARED.add(str(o.Id))
             if geo is None or id(geo[0]) in _RAY_READY: continue
             bb = geo[0].GetBoundingBox(False)
             try:
                 rg.Intersect.Intersection.MeshRay(geo[0], rg.Ray3d(bb.Center + rg.Vector3d(0, 0, bb.Diagonal.Length),
                                                                     rg.Vector3d(0, 0, -1)))
-                geo[0].ClosestMeshPoint(bb.Center, 0.0)          # AutoFit / closest point search tree
+                geo[0].ClosestMeshPoint(bb.Center, 0.0)          # FitInSpheres / closest point search tree
             except Exception:
                 pass
             _RAY_READY.add(id(geo[0]))
@@ -816,14 +858,94 @@ def local_mesh(idef):
 # ray meets it, Rhino always has the point, and that point lies exactly on the
 # ray through the cursor - the ray we shoot onto the meshes. The plane sits in
 # the middle of the view's depth range (click_plane), never outside it.
-def scan_get(gp):
-    """Get one click for the mesh tools (see CLICK_UP, CLICK_PLANE)."""
+# ONE function for every click of the plugin (scan/mesh tools, photos, the
+# patches, TempPts points): click_get. Nothing else calls GetPoint.Get or
+# GetPoint.Constrain (tests/test_rules.py checks that). The point ON a mesh
+# under the cursor comes from cursor_ray + mesh_ray_point - at the click and
+# at every mouse move - never from a GetPoint constrained to the mesh (that
+# shows the 'no entry' cursor wherever the mesh is not under the cursor).
+def click_get(gp, mouse_up=True, tip=None):
+    """Get one click (see CLICK_UP, CLICK_PLANE): no osnap, the click plane
+    facing the camera kept up to date with the view.
+    tip: (text, (r, g, b)) or a function giving it - a coloured bubble at the
+    cursor that says what this click is for (see CURSOR_TIP)."""
     try:
         gp.PermitObjectSnap(False)               # an osnap would pull the point off the cursor ray
     except Exception:
         pass
     view_constrain(gp)
-    return tracked_get(gp)
+    if not tip:
+        return tracked_get(gp, mouse_up)
+    tip_on(gp, tip)
+    try:
+        return tracked_get(gp, mouse_up)
+    finally:
+        tip_off()
+
+
+# CURSOR_TIP: a coloured bubble next to the cursor while a click is awaited -
+# what to click, in the colour of what to click ON (the command line options
+# are small and far away). One for the whole plugin: click_get(gp, tip=...).
+_TIP = {"tip": None, "at": None}
+TIP_DX, TIP_DY = 18.0, 26.0              # below right of the cursor: it never covers the point clicked
+
+
+def _tip_move(sender, e):
+    try: _TIP["at"] = (e.Viewport.Id, float(e.WindowPoint.X), float(e.WindowPoint.Y))
+    except Exception: pass
+
+
+def _tip_draw(sender, e):
+    tip = _TIP["tip"]; at = _TIP["at"]
+    if not tip or at is None: return
+    try:
+        if e.Viewport.Id != at[0]: return
+        text, rgb = tip() if callable(tip) else tip
+        if not text: return
+        lum = 0.3 * rgb[0] + 0.59 * rgb[1] + 0.11 * rgb[2]
+        k = sd.Color.FromArgb(255, 255, 255) if lum < 150 else sd.Color.FromArgb(20, 20, 20)
+        e.Display.DrawDot(at[1] + TIP_DX + 3.4 * len(text), at[2] + TIP_DY, text, sd.Color.FromArgb(*rgb), k)
+    except Exception:
+        pass
+
+
+def cursor_in_view():
+    """(viewport id, x, y) of the mouse in the active view NOW - so the bubble is
+    there at once, not only after the mouse moves. None if it cannot be read."""
+    try:
+        v = sc.doc.Views.ActiveView
+        sp = None
+        try:
+            import System.Windows.Forms as swf           # Windows: screen pixels, as ScreenToClient wants
+            q = swf.Cursor.Position; sp = (q.X, q.Y)
+        except Exception:
+            import Eto.Forms as ef                       # Mac
+            q = ef.Mouse.Position; sp = (int(q.X), int(q.Y))
+        cp = v.ScreenToClient(sd.Point(sp[0], sp[1]))
+        return (v.ActiveViewport.Id, float(cp.X), float(cp.Y))
+    except Exception:
+        return None
+
+
+def tip_on(gp, tip):
+    _TIP["tip"] = tip
+    now = cursor_in_view()               # at once where the mouse is (else: where it was at the last move)
+    if now is not None: _TIP["at"] = now
+    try: gp.MouseMove += _tip_move
+    except Exception: pass
+    try: Rhino.Display.DisplayPipeline.DrawForeground += _tip_draw
+    except Exception: pass
+    try: sc.doc.Views.Redraw()
+    except Exception: pass
+
+
+def tip_off():
+    _TIP["tip"] = None
+    try: Rhino.Display.DisplayPipeline.DrawForeground -= _tip_draw
+    except Exception: pass
+
+
+scan_get = click_get                             # the old name
 
 
 # The GetPoint now waiting for a mesh-tool click: its plane is made again
@@ -853,8 +975,8 @@ def _reconstrain(vp):
         pass
 
 
-def tracked_get(gp):
-    """gp.Get(True) with its click plane kept up to date (see above)."""
+def tracked_get(gp, mouse_up=True):
+    """gp.Get(mouse_up) with its click plane kept up to date (see above)."""
     def modified(sender, e):
         try: _reconstrain(e.View.ActiveViewport)
         except Exception: pass
@@ -865,7 +987,7 @@ def tracked_get(gp):
         pass
     _CLICK_GP.append(gp)
     try:
-        return gp.Get(True)
+        return gp.Get(True) if mouse_up else gp.Get()
     finally:
         if gp in _CLICK_GP: _CLICK_GP.remove(gp)
         _CLICK_KEY.pop(id(gp), None)
@@ -879,13 +1001,25 @@ def is_click(res):
 
 
 def click_ray(gp):
-    """(start point, direction) of the ray through the cursor at the click,
-    or None. From the 3D point Rhino gives (on the camera-facing plane, see
-    CLICK_PLANE); the window point only if that fails."""
+    """(start point, direction) of the ray through the cursor at the click, or None."""
     try:
         vp = gp.View().ActiveViewport
-        P = gp.Point()
-        if P.IsValid:
+    except Exception:
+        return None
+    try: P = gp.Point()
+    except Exception: P = None
+    try: p2 = gp.Point2d()
+    except Exception: p2 = None
+    return cursor_ray(vp, P, p2)
+
+
+def cursor_ray(vp, P, p2=None):
+    """(start point, direction) of the ray through the cursor: from the 3D
+    point Rhino gives (on the camera-facing plane, see CLICK_PLANE), the
+    window point p2 only if that fails. For clicks (click_ray) and mouse
+    moves (e.Viewport, e.Point, e.WindowPoint) alike."""
+    try:
+        if P is not None and P.IsValid:
             if vp.IsPerspectiveProjection:
                 a_ = rg.Point3d(vp.CameraLocation); d0 = P - a_
                 if d0 * vp.CameraDirection < 0: d0 = -d0
@@ -897,8 +1031,7 @@ def click_ray(gp):
     except Exception:
         pass
     try:
-        vp = gp.View().ActiveViewport
-        p2 = gp.Point2d()
+        if p2 is None: return None
         r = vp.GetFrustumLine(float(p2.X), float(p2.Y))
         if isinstance(r, tuple):
             if not r[0]: return None
@@ -906,6 +1039,18 @@ def click_ray(gp):
         else:
             line = r
         return rg.Point3d(line.From), line.To - line.From
+    except Exception:
+        return None
+
+
+def mesh_ray_point(mesh, ray):
+    """The first point where the ray hits the mesh (world coordinates), or None."""
+    if mesh is None or ray is None: return None
+    try:
+        a_, d0 = ray
+        t = Rhino.Geometry.Intersect.Intersection.MeshRay(mesh, rg.Ray3d(a_, d0))
+        if t is None or t < 0: return None
+        return a_ + d0 * t
     except Exception:
         return None
 
@@ -1129,19 +1274,19 @@ _ACTIVE_DRAWS = []
 
 class _ScanDraw(object):
     """What the mesh tools show while you click: tags as pins, the mirrored copy
-    (blue points) of the visible meshes, the AutoFit spheres and (Fine) the
+    (blue points) of the visible meshes, the spheres of FitInSpheres and (Fine) the
     gumball. Drawn by Rhino's display pipeline (like MeshMirror) on EVERY
     redraw - not by the GetPoint's DynamicDraw: the tools ask only for a window
     point (no 3D point), and then Rhino calls DynamicDraw irregularly or not at
-    all (tags appeared only after some pairs, SpherePreview did nothing).
+    all (tags appeared only after some pairs, ShowSpheres did nothing).
     On from creation; off() / _ScanDraw.off_all() when the tool ends."""
     def __init__(self, insts, axis):
         self.insts = insts; self.axis = axis; self.dots = []; self.lines = []
         self.show_mirror = axis is not None
         self.pins_fn = None          # -> ([(point, text, colour, leader)], [(a, b) links])
-        self.sph_fn = None           # -> (centres, radius): the AutoFit spheres
+        self.sph_fn = None           # -> (centres, radius): the spheres of FitInSpheres
         self.sph_until = 0.0         # shown until this time (after a radius change) ...
-        self.sph_on = False          # ... or all the time (SpherePreview)
+        self.sph_on = False          # ... or all the time (ShowSpheres)
         self.extra = None            # f(display, viewport, m): e.g. the Fine gumball
         self._on = False
         self._hb = self._bbox; self._h3 = self._post; self._h2 = self._fore   # same handlers for += and -=
@@ -1230,7 +1375,7 @@ class _ScanDraw(object):
 
 
 def _draw_spheres(self, d):
-    """AutoFit spheres, see-through, fading out after a radius change."""
+    """spheres of FitInSpheres, see-through, fading out after a radius change."""
     if not self.sph_fn: return
     now = time.time()
     if not self.sph_on and now > self.sph_until: return
@@ -1249,7 +1394,7 @@ def _draw_spheres(self, d):
             pass
 
 
-SPHERE_FLASH = 3.0               # seconds the AutoFit spheres show after a radius change
+SPHERE_FLASH = 3.0               # seconds the spheres of FitInSpheres show after a radius change
 _ScanDraw.draw_spheres = _draw_spheres
 
 
@@ -1364,7 +1509,7 @@ def _scan_center(axis, insts):
         _apply(insts, applied, total())
 
     def tag_centres():
-        """Tags (left and right) where they are now - the AutoFit spheres."""
+        """Tags (left and right) where they are now - the spheres of FitInSpheres."""
         out = []
         for (L_, R_) in pairs:
             out += [world(L_), world(R_)]
@@ -1375,12 +1520,12 @@ def _scan_center(axis, insts):
 
     while True:
         gp = ric.GetPoint()
-        locked = not _xf_is_identity(st["F"])         # after Fine / AutoFit: no more pairs
+        locked = not _xf_is_identity(st["F"])         # after Fine / FitInSpheres: no more pairs
         if locked:
-            gp.SetCommandPrompt("Center: tuned with Fine / AutoFit - pairs are locked now (ResetFine = back to the "
-                                "pairs), Enter = done, Esc = cancel Center (scans/meshes back, Fine / AutoFit too)")
+            gp.SetCommandPrompt("Center: tuned with Fine / FitInSpheres - pairs are locked now (ResetFine = back to the "
+                                "pairs), Enter = done, Esc = cancel Center (scans/meshes back, Fine / FitInSpheres too)")
         else:
-            gp.SetCommandPrompt("Center: pair {} - click the {} point ({} pair(s); then Fine / AutoFit), Enter = done, "
+            gp.SetCommandPrompt("Center: pair {} - click the {} point ({} pair(s); then Fine / FitInSpheres), Enter = done, "
                                 "Esc = cancel Center, scans/meshes back)".format(len(pairs) + 1, "LEFT" if st["left"] is None else "RIGHT", len(pairs)))
         gp.AcceptNothing(True)
         o_undo = o_sym = o_reset = -99
@@ -1388,9 +1533,9 @@ def _scan_center(axis, insts):
             o_undo = gp.AddOption("UndoPair")
         o_cancel = gp.AddOption("Cancel")
         o_mir = gp.AddOption("MirrorPreview"); o_fine = gp.AddOption("Fine")
-        o_auto = gp.AddOption("AutoFit")
-        o_radv = ric.OptionDouble(autofit_radius(), 0.0, 1e6); o_rad = gp.AddOptionDouble("AutoFitRadius", o_radv)
-        o_sph = gp.AddOptionToggle("SpherePreview", ric.OptionToggle(drw.sph_on, "Off", "On"))
+        o_auto = gp.AddOption("FitInSpheres")
+        o_radv = ric.OptionDouble(autofit_radius(), 0.0, 1e6); o_rad = gp.AddOptionDouble("SphereRadius", o_radv)
+        o_sph = gp.AddOptionToggle("ShowSpheres", ric.OptionToggle(drw.sph_on, "Off", "On"))
         o_scale = gp.AddOption("ScaleByCurve")
         if locked:
             o_reset = gp.AddOption("ResetFine")
@@ -1415,7 +1560,7 @@ def _scan_center(axis, insts):
                 continue
             if oi == o_auto:
                 if st["left"] is not None:
-                    print("  (the unpaired LEFT tag is dropped - pairs are locked after AutoFit)"); st["left"] = None
+                    print("  (the unpaired LEFT tag is dropped - pairs are locked after FitInSpheres)"); st["left"] = None
                 run_autofit(insts, st, commit, print_devs, tag_centres())
                 continue
             if oi == o_rad:
@@ -1427,7 +1572,7 @@ def _scan_center(axis, insts):
                 continue
             if oi == o_reset:
                 st["F"] = rg.Transform.Identity; commit(); sc.doc.Views.Redraw()
-                print("  Fine / AutoFit undone - back to the result of the pairs; pairs unlocked")
+                print("  Fine / FitInSpheres undone - back to the result of the pairs; pairs unlocked")
                 print_devs(short=True)
                 continue
             if oi == o_sym:
@@ -1445,8 +1590,8 @@ def _scan_center(axis, insts):
             continue
         if is_click(res):
             if locked:
-                print("  pairs are locked after Fine / AutoFit (a new pair would throw that work away). "
-                      "Fine / AutoFit again, Enter = done, or ResetFine = back to the pairs.")
+                print("  pairs are locked after Fine / FitInSpheres (a new pair would throw that work away). "
+                      "Fine / FitInSpheres again, Enter = done, or ResetFine = back to the pairs.")
                 continue
             hit = pick_on_scans(gp, insts)
             if hit is None:
@@ -1496,14 +1641,14 @@ def _scan_center(axis, insts):
         _scan_scale_raw()
 
 
-# ---- AutoFit: the mirror fitted to the scan itself (ICP) --------------------
+# ---- FitInSpheres: the mirror fitted to the scan itself (ICP) --------------------
 AUTOFIT_SAMPLES = 3000           # scan points used (whole scan)
 AUTOFIT_PER_TAG = 300            # scan points used per tag sphere
 AUTOFIT_ITERS = 12
 
 
 def autofit_radius():
-    """Sphere radius around every tag for AutoFit (model units); 0 = whole mesh."""
+    """Sphere radius around every tag for FitInSpheres (model units); 0 = whole mesh."""
     return float(opt_get("fit_radius", 50.0 / _mm_per_unit()))
 
 
@@ -1634,7 +1779,7 @@ def autofit_mirror(insts, axis, centres=None, radius=0.0):
         for i in range(0, len(lp), step):
             q = rg.Point3d(lp[i]); q.Transform(geo[1]); pts.append(q)
     if len(pts) < 50 or not geos:
-        return None, ("too few scan/mesh points inside the tag spheres - larger AutoFitRadius?" if spheres
+        return None, ("too few scan/mesh points inside the tag spheres - larger SphereRadius?" if spheres
                       else "too few scan/mesh points (are the scans/meshes visible?)")
     nrm = [0.0, 0.0, 0.0]; nrm[axis] = 1.0
     E = rg.Vector3d(nrm[0], nrm[1], nrm[2])
@@ -1824,8 +1969,8 @@ def _fine(insts, axis, drw, st, commit, print_devs, pairs, world, fit_fn=None, p
     that world axis, around a point on the symmetry plane. Every pixel of the
     drag is MovePerPx model units / DegPerPx degrees - very small steps.
     All chosen meshes move, also the hidden ones. Enter / Back = keep,
-    Esc = undo the Fine moves of this round. fit_fn: the tool's own Fit
-    (Align); without it AutoFit is the mirror fit of Center."""
+    Esc = undo the Fine moves of this round. fit_fn: the tool's own FitInSpheres
+    (Align); without it FitInSpheres is the mirror fit of Center."""
     F0 = st["F"]
     st["fine"] = True                            # tags: r = L mirrored (with distance), R grey
     P = pivot if pivot is not None else _fine_pivot(insts, axis, pairs, world)
@@ -1879,9 +2024,9 @@ def _fine(insts, axis, drw, st, commit, print_devs, pairs, world, fit_fn=None, p
             o_mir = -99
             if fit_fn is None:
                 o_mir = gp.AddOption("MirrorPreview")
-            o_auto = gp.AddOption("AutoFit" if fit_fn is None else "Fit")
-            o_radv = ric.OptionDouble(autofit_radius(), 0.0, 1e6); o_rad = gp.AddOptionDouble("AutoFitRadius", o_radv)
-            o_sph = gp.AddOptionToggle("SpherePreview", ric.OptionToggle(drw.sph_on, "Off", "On"))
+            o_auto = gp.AddOption("FitInSpheres")
+            o_radv = ric.OptionDouble(autofit_radius(), 0.0, 1e6); o_rad = gp.AddOptionDouble("SphereRadius", o_radv)
+            o_sph = gp.AddOptionToggle("ShowSpheres", ric.OptionToggle(drw.sph_on, "Off", "On"))
             gp.MouseDown += on_down; gp.MouseMove += on_move
             gp.PermitOrthoSnap(False); gp.PermitElevatorMode(0); gp.PermitObjectSnap(False)
             view_constrain(gp)                           # plane facing the camera, made fresh every click
@@ -1931,7 +2076,7 @@ def _fine(insts, axis, drw, st, commit, print_devs, pairs, world, fit_fn=None, p
 
 
 def run_autofit(insts, st, commit, print_devs, centres=None):
-    busy = show_busy("AutoFit: fitting the mirror to the scan/mesh...", esc="stop AutoFit")
+    busy = show_busy("FitInSpheres: fitting the mirror to the scan/mesh...", esc="stop FitInSpheres")
     try:
         move, txt = autofit_mirror(insts, st["axis"], centres, autofit_radius())
     except UserAbort:
@@ -1939,9 +2084,9 @@ def run_autofit(insts, st, commit, print_devs, centres=None):
     finally:
         hide_busy(busy)
     if move is None:
-        print("  [AutoFit] nothing changed: " + txt); return
+        print("  [FitInSpheres] nothing changed: " + txt); return
     st["F"] = move * st["F"]; commit(); sc.doc.Views.Redraw()
-    print("  [AutoFit] " + txt)
+    print("  [FitInSpheres] " + txt)
     print_devs(short=True)
 
 
@@ -2289,12 +2434,15 @@ def _update_setups_after_align(moved_ids, onto=()):
 def scan_align():
     """Align: click a point on the mesh that STAYS, then the same point on the
     mesh that MOVES - at least 3 such pairs. The moving mesh (and every mesh
-    aligned to it before) jumps onto the other one after each pair. Fit =
+    aligned to it before) jumps onto the other one after each pair. FitInSpheres =
     automatic on the overlap, Fine = gumball. Enter = done, Esc = cancel."""
     single_view()
     insts = all_scan_insts()
     if len(insts) < 2:
         print("[Align] needs two scans/meshes at least"); return
+    if not align_ask_all(insts):
+        print("[Align] not started - hide the scan/meshes you do not need (their layers), then MeshAlign again")
+        return
     prepare_scans(insts, "Align")
     mir_axis = pause_scanmirror()
     try:
@@ -2304,8 +2452,46 @@ def scan_align():
         resume_scanmirror(mir_axis)
 
 
+def align_needs_ask(insts):
+    """More than 2 scan/meshes visible and some never prepared for clicking (slow the first time)."""
+    vis = [o for o in insts if scan_visible(sc.doc.Objects.FindId(o.Id) or o)]
+    return len(vis) > 2 and any(str(o.Id) not in _PREPARED for o in vis)
+
+
+def align_ask_all(insts):
+    """MeshAlign takes part with EVERY visible scan/mesh (they are prepared for
+    clicking: slow the first time with many). It never hides one itself - it
+    asks: go on with all, or stop and hide the ones not needed yourself.
+    -> True = go on."""
+    if not align_needs_ask(insts):
+        return True
+    vis = [o for o in insts if scan_visible(sc.doc.Objects.FindId(o.Id) or o)]
+    new = [o for o in vis if str(o.Id) not in _PREPARED]
+    gs = ric.GetString()
+    gs.SetCommandPrompt("MeshAlign: {} scan/meshes are visible and ALL take part ({} not prepared yet - with many that "
+                        "takes long). <Enter = go on with all of them, Esc = stop: hide the ones you do not need, "
+                        "then MeshAlign again>".format(len(vis), len(new)))
+    gs.AcceptNothing(True)
+    res = gs.Get()
+    return res != Rhino.Input.GetResult.Cancel
+
+
 ALIGN_STAY_COL = (230, 40, 40)     # the mesh that STAYS while aligning
 ALIGN_MOVE_COL = (40, 190, 60)     # the mesh that MOVES (and the ones aligned to it before)
+
+
+def align_tip(st, n, locked):
+    """The bubble at the cursor in Align (CURSOR_TIP): what the next click is,
+    in the colour of the scan/mesh to click on."""
+    if locked:
+        return ("FitInSpheres / Fine done - Enter = done", (90, 90, 90))
+    if st["first"] is None:
+        if st["fixed"] is None:
+            return ("Pair {}: point on the scan/mesh that STAYS (turns RED)".format(n), ALIGN_STAY_COL)
+        return ("Pair {}: point on the RED scan/mesh (stays)".format(n), ALIGN_STAY_COL)
+    if st["moving"] is None:
+        return ("Pair {}: SAME point on the scan/mesh that MOVES (turns GREEN)".format(n), ALIGN_MOVE_COL)
+    return ("Pair {}: SAME point on the GREEN scan/mesh (moves)".format(n), ALIGN_MOVE_COL)
 
 
 class _Paint(object):
@@ -2337,15 +2523,15 @@ class _Paint(object):
         sc.doc.Views.Redraw()
 
 
-def _scan_align(insts):
+def _scan_align(insts, all_insts=None):
     paint = _Paint()
     try:
-        _scan_align_run(insts, paint)
+        _scan_align_run(insts, paint, all_insts or insts)
     finally:
         paint.restore()                     # the meshes get their own colours back
 
 
-def _scan_align_run(insts, paint):
+def _scan_align_run(insts, paint, all_insts):
     tag = "[Align]"
     print(tag + " pair = 2 clicks: 1st on the scan/mesh that STAYS (it turns RED), 2nd on the same place of the scan/mesh "
           "that MOVES (it turns GREEN). After every pair the GREEN scan/mesh jumps onto the RED one (its tag M lands on S).")
@@ -2404,13 +2590,13 @@ def _scan_align_run(insts, paint):
     drw.sph_fn = lambda: (centres(), autofit_radius())
 
     def fit():
-        """ICP only inside the spheres (AutoFitRadius) around the pairs, like
-        AutoFit of Center: moving-mesh points there -> closest points of the
+        """ICP only inside the spheres (SphereRadius) around the pairs, like
+        FitInSpheres of Center: moving-mesh points there -> closest points of the
         mesh that stays. The rest of the meshes (extra material, free ends)
         is never used."""
-        print("  Fit = the GREEN scan/mesh is pulled onto the RED one BY ITSELF, after your pairs placed it roughly: "
-              "only where the two overlap inside the spheres (AutoFitRadius) around the pairs; your clicks need not "
-              "be exact. Fit again = finer, Esc = stop (back to before this Fit)")
+        print("  FitInSpheres = the GREEN scan/mesh is pulled onto the RED one BY ITSELF, after your pairs placed it roughly: "
+              "only where the two overlap inside the spheres (SphereRadius) around the pairs; your clicks need not "
+              "be exact. FitInSpheres again = finer, Esc = stop (back to before this FitInSpheres)")
         fixed = sc.doc.Objects.FindId(st["fixed_obj"].Id) if st.get("fixed_obj") else None
         g = scan_geo(fixed) if fixed is not None else None
         if not g: return
@@ -2421,12 +2607,12 @@ def _scan_align_run(insts, paint):
         if not ok: return
         r = autofit_radius()
         if r <= 0:
-            print("  Fit needs AutoFitRadius > 0 (the spheres around the pairs)"); return
+            print("  FitInSpheres needs SphereRadius > 0 (the spheres around the pairs)"); return
         r2 = r * r
         pts = []
         for o0 in st["set"]:
             o = sc.doc.Objects.FindId(o0.Id)
-            if o is None: continue
+            if o is None or not scan_visible(o): continue          # hidden (Align hid it): moves along, not used
             geo = scan_geo(o); cl = scan_cloud(o, True)
             if geo is None or cl is None: continue
             ok, inv = geo[1].TryGetInverse()
@@ -2441,12 +2627,12 @@ def _scan_align_run(insts, paint):
                     q = rg.Point3d(q0); q.Transform(geo[1]); q.Transform(tinv)
                     pts.append(q)                              # base coordinates of the moving scans
         if len(pts) < 30:
-            print("  too few scan/mesh points inside the spheres - larger AutoFitRadius?"); return
-        busy = show_busy("Align: Fit...", esc="stop Fit - Align goes on")
+            print("  too few scan/mesh points inside the spheres - larger SphereRadius?"); return
+        busy = show_busy("Align: FitInSpheres...", esc="stop FitInSpheres - Align goes on")
         keep = []
         F0 = st["F"]
         try:
-            # point-to-plane ICP (as AutoFit): converges where point-to-point slid on smooth
+            # point-to-plane ICP (as FitInSpheres): converges where point-to-point slid on smooth
             # surfaces and stopped centimetres short
             for it in range(ALIGN_FIT_ITERS):
                 check_esc()
@@ -2467,17 +2653,17 @@ def _scan_align_run(insts, paint):
             commit()
         except UserAbort:
             st["F"] = F0; commit(); sc.doc.Views.Redraw()
-            print("  Fit stopped (Esc) - back to before Fit; Align goes on"); return
+            print("  FitInSpheres stopped (Esc) - back to before FitInSpheres; Align goes on"); return
         finally:
             hide_busy(busy)
-        print("  Fit done ({} points in {} spheres of {})".format(len(keep), len(pairs), fl(r)))
+        print("  FitInSpheres done ({} points in {} spheres of {})".format(len(keep), len(pairs), fl(r)))
         print_devs()
 
     while True:
         gp = ric.GetPoint()
         locked = not _xf_is_identity(st["F"])
         if locked:
-            gp.SetCommandPrompt("Align: Fit / Fine done <Enter / right click = done, ResetFine, Esc = cancel Align, scans/meshes back>")
+            gp.SetCommandPrompt("Align: FitInSpheres / Fine done <Enter / right click = done, ResetFine, Esc = cancel Align, scans/meshes back>")
         else:
             if st["first"] is None:
                 which = "the scan/mesh that STAYS (it turns RED)" if st["fixed"] is None else "the RED scan/mesh (stays)"
@@ -2485,6 +2671,7 @@ def _scan_align_run(insts, paint):
                 which = "the scan/mesh that MOVES (it turns GREEN)" if st["moving"] is None else "the GREEN scan/mesh (moves)"
             gp.SetCommandPrompt("Align pair {}: point on {} <Enter / right click = done, Esc = cancel Align, scans/meshes back>".format(
                 len(pairs) + 1, which))
+        tip = align_tip(st, len(pairs) + 1, locked)
         gp.AcceptNothing(True)
         o_undo = o_fit = o_fine = o_reset = -99
         o_scl = -99
@@ -2493,13 +2680,13 @@ def _scan_align_run(insts, paint):
             o_scl = gp.AddOptionToggle("Scale", ric.OptionToggle(bool(st.get("scale")), "Off", "On"))
         o_rad = o_sph = -99
         if len(pairs) >= 3:
-            o_fit = gp.AddOption("Fit"); o_fine = gp.AddOption("Fine")
-            o_radv = ric.OptionDouble(autofit_radius(), 0.0, 1e6); o_rad = gp.AddOptionDouble("AutoFitRadius", o_radv)
-            o_sph = gp.AddOptionToggle("SpherePreview", ric.OptionToggle(drw.sph_on, "Off", "On"))
+            o_fit = gp.AddOption("FitInSpheres"); o_fine = gp.AddOption("Fine")
+            o_radv = ric.OptionDouble(autofit_radius(), 0.0, 1e6); o_rad = gp.AddOptionDouble("SphereRadius", o_radv)
+            o_sph = gp.AddOptionToggle("ShowSpheres", ric.OptionToggle(drw.sph_on, "Off", "On"))
         if locked:
             o_reset = gp.AddOption("ResetFine")
         gp.PermitOrthoSnap(False); gp.PermitElevatorMode(0)
-        res = scan_get(gp)
+        res = click_get(gp, tip=tip)
         if res == Rhino.Input.GetResult.Option:
             oi = gp.Option().Index
             if oi == o_undo:
@@ -2512,7 +2699,7 @@ def _scan_align_run(insts, paint):
             elif oi == o_scl:
                 st["scale"] = not st.get("scale")
                 print("  Scale {}: {}".format("ON" if st["scale"] else "off",
-                      "the moving scan/mesh also changes its SIZE (3+ pairs, Fit) - for AI / photogrammetry meshes "
+                      "the moving scan/mesh also changes its SIZE (3+ pairs, FitInSpheres) - for AI / photogrammetry meshes "
                       "without a true size" if st["scale"] else "turn + move only"))
                 st["T"] = solve(); commit(); print_devs()
             elif oi == o_fit:
@@ -2532,7 +2719,7 @@ def _scan_align_run(insts, paint):
             continue
         if is_click(res):
             if locked:
-                print("  pairs are locked after Fit / Fine (ResetFine = back to the pairs)"); continue
+                print("  pairs are locked after FitInSpheres / Fine (ResetFine = back to the pairs)"); continue
             # the click goes ONLY onto the mesh it is meant for (another mesh in
             # front of it - e.g. the new scan over the old one - is looked through)
             if st["first"] is None:
@@ -2561,7 +2748,7 @@ def _scan_align_run(insts, paint):
                     if st["fixed"] in branch:
                         print("  this scan/mesh carries the one that stays (it was aligned to it) - align the other way"); continue
                     core = frame_core()
-                    bnames = set(_scan_name(o) for o in insts if str(o.Id) in branch)
+                    bnames = set(_scan_name(o) for o in all_insts if str(o.Id) in branch)
                     fname = _scan_name(st["fixed_obj"])
                     bad = frame_refusal(frame_get(), bnames, [fname])
                     if bad:
@@ -2571,7 +2758,7 @@ def _scan_align_run(insts, paint):
                         continue
                     st["in_frame"] = bool(bnames & core)         # a scan/mesh that holds the centre moves
                     st["moving"] = str(obj.Id); st["ids"] = branch; st["moving_obj"] = obj
-                    st["set"] = [o for o in insts if str(o.Id) in branch]
+                    st["set"] = [o for o in all_insts if str(o.Id) in branch]     # hidden ones move too
                     paint.paint(st["set"], ALIGN_MOVE_COL)
                     print("  GREEN = the scan/mesh that moves{}".format(
                         "" if len(st["set"]) == 1 else " + {} scan(s)/mesh(es) aligned to it before (they move with it)".format(
@@ -2581,7 +2768,7 @@ def _scan_align_run(insts, paint):
                 pairs.append((st["first"], pb)); st["first"] = None
                 st["T"] = solve(); commit(); print_devs()
                 if len(pairs) == 3:
-                    print("  3 pairs: turned and moved. More pairs = better, or Fit / Fine")
+                    print("  3 pairs: turned and moved. More pairs = better, or FitInSpheres / Fine")
             sc.doc.Views.Redraw()
             continue
         if res == Rhino.Input.GetResult.Cancel:
@@ -2669,11 +2856,11 @@ AUTOALIGN_ITERS = 30
 
 def scan_autoalign():
     """AutoAlign: many scans/meshes pulled together at once, ONLY inside the
-    spheres (AutoFitRadius) around the markers (the Align pairs made before
+    spheres (SphereRadius) around the markers (the Align pairs made before
     + points you click now). Two lists: which ones MOVE, which ones STAY -
     hidden ones too. The ones that stay (e.g. the centred front) never move;
     every moving one is pulled onto the ones that stay AND onto the other
-    moving ones, all together (point-to-plane, as Fit / AutoFit)."""
+    moving ones, all together (point-to-plane, as FitInSpheres / FitInSpheres)."""
     single_view()
     insts = all_scan_insts()
     if len(insts) < 2:
@@ -2759,14 +2946,14 @@ def _scan_autoalign(insts, by, bodies, stay, moving_names, mem):
         len(bodies), ", ".join(sorted(moving_names)), len(stay), ", ".join(stay), len(old)))
     while True:
         gp = ric.GetPoint()
-        gp.SetCommandPrompt("AutoAlign: {} sphere(s) of AutoFitRadius - click more markers on the overlaps, Fit = "
+        gp.SetCommandPrompt("AutoAlign: {} sphere(s) of SphereRadius - click more markers on the overlaps, FitInSpheres = "
                             "pull together, Enter = done, Esc = cancel AutoAlign (scans/meshes back)".format(
                                 len(centres())))
         gp.AcceptNothing(True)
-        o_fit = gp.AddOption("Fit")
+        o_fit = gp.AddOption("FitInSpheres")
         o_undo = gp.AddOption("UndoPt") if clicked else -99
-        o_radv = ric.OptionDouble(autofit_radius(), 0.0, 1e6); o_rad = gp.AddOptionDouble("AutoFitRadius", o_radv)
-        o_sph = gp.AddOptionToggle("SpherePreview", ric.OptionToggle(drw.sph_on, "Off", "On"))
+        o_radv = ric.OptionDouble(autofit_radius(), 0.0, 1e6); o_rad = gp.AddOptionDouble("SphereRadius", o_radv)
+        o_sph = gp.AddOptionToggle("ShowSpheres", ric.OptionToggle(drw.sph_on, "Off", "On"))
         o_scl = gp.AddOptionToggle("Scale", ric.OptionToggle(st["scale"], "Off", "On"))
         gp.PermitOrthoSnap(False); gp.PermitElevatorMode(0)
         res = scan_get(gp)
@@ -2798,7 +2985,7 @@ def _scan_autoalign(insts, by, bodies, stay, moving_names, mem):
         break
     markers_add(clicked)
     if not st["fitted"]:
-        print(tag + " no Fit done - nothing moved"); return
+        print(tag + " no FitInSpheres done - nothing moved"); return
     # each listed moving one remembers the scan/mesh it was pulled onto most (Align tree; never a loop)
     for (n, grp) in bodies:
         o = by[n]
@@ -2846,7 +3033,7 @@ def _autoalign_fit(by, bodies, stay, centres, r, st):
     moving), n.(q + dq - c - dc) = 0 linearised for every body, one least-
     squares system. Bodies with no rows do not move; the staying ones never."""
     if r <= 0:
-        print("  AutoAlign needs AutoFitRadius > 0"); return
+        print("  AutoAlign needs SphereRadius > 0"); return
     if not centres:
         print("  no markers: click points on the overlaps first (or Align some pairs before)"); return
     names_body = {}
@@ -2854,7 +3041,7 @@ def _autoalign_fit(by, bodies, stay, centres, r, st):
         for k in grp: names_body[k] = bi
     objs = sorted(set(names_body) | set(stay))
     r2 = r * r
-    # samples IN their blocks, per sphere (the spheres stay where they are at the start of Fit)
+    # samples IN their blocks, per sphere (the spheres stay where they are at the start of FitInSpheres)
     samp = {}
     for nm in objs:
         o = sc.doc.Objects.FindId(by[nm].Id)
@@ -2873,11 +3060,11 @@ def _autoalign_fit(by, bodies, stay, centres, r, st):
                 samp.setdefault(si, {})[nm] = [rg.Point3d(q) for q in near[::step]]
     spheres = [si for si, d in samp.items() if len(d) >= 2 and any(k in names_body for k in d)]
     if not spheres:
-        print("  no sphere holds a moving AND another scan/mesh - markers on the overlaps, or a larger AutoFitRadius")
+        print("  no sphere holds a moving AND another scan/mesh - markers on the overlaps, or a larger SphereRadius")
         return
     K = len(bodies)
     U = 7 if st.get("scale") else 6                 # unknowns per body: turn, move (+ size)
-    busy = show_busy("AutoAlign: Fit...", esc="stop Fit - AutoAlign goes on")
+    busy = show_busy("AutoAlign: FitInSpheres...", esc="stop FitInSpheres - AutoAlign goes on")
     start = dict((nm, _xf_copy(sc.doc.Objects.FindId(by[nm].Id).InstanceXform)) for nm in names_body)
     med0 = None; med = None; rows_n = 0; cnt = {}
     try:
@@ -2971,7 +3158,7 @@ def _autoalign_fit(by, bodies, stay, centres, r, st):
             ok, inv = o.InstanceXform.TryGetInverse()
             if ok: sc.doc.Objects.Transform(o.Id, X0 * inv, True)
         sc.doc.Views.Redraw()
-        print("  Fit stopped (Esc) - back to before this Fit; AutoAlign goes on"); return
+        print("  FitInSpheres stopped (Esc) - back to before this FitInSpheres; AutoAlign goes on"); return
     finally:
         hide_busy(busy)
     sc.doc.Views.Redraw()
@@ -2979,7 +3166,7 @@ def _autoalign_fit(by, bodies, stay, centres, r, st):
     for ln, d_ in cnt.items():
         acc = st["rows"].setdefault(ln, {})
         for b, k in d_.items(): acc[b] = acc.get(b, 0) + k
-    print("  Fit done: {} sphere(s), {} point pairs; distance on the overlaps (median) {} -> {}".format(
+    print("  FitInSpheres done: {} sphere(s), {} point pairs; distance on the overlaps (median) {} -> {}".format(
         len(spheres), rows_n, fl(med0 or 0.0), fl(med or 0.0)))
     if st.get("scale"):
         print("  sizes now: " + ", ".join("{} x{:.5f}".format(n, xf_scale(sc.doc.Objects.FindId(by[n].Id).InstanceXform))

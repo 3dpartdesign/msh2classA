@@ -58,7 +58,7 @@ def collect_candidates(mesh):
     s.LockedObjects = True
     cands = []
     for obj in sc.doc.Objects.GetObjectList(s):
-        if is_preview(obj): continue
+        if is_preview(obj) or on_reference_layer(obj): continue      # scan/mesh and photo layers: not part of it
         geo = obj.Geometry
         try:
             if isinstance(geo, rg.Curve):
@@ -95,7 +95,7 @@ def collect_surfaces(mesh):
     s.VisibleFilter = True; s.HiddenObjects = False; s.LockedObjects = False
     out = []
     for obj in sc.doc.Objects.GetObjectList(s):
-        if is_preview(obj): continue
+        if is_preview(obj) or on_reference_layer(obj): continue      # a photo is a flat surface: never a patch
         geo = obj.Geometry
         brep = None
         if isinstance(geo, rg.Brep): brep = geo

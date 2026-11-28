@@ -8,6 +8,12 @@
 # Scan sampling: only faces turned like the patch
 # -----------------------------------------------------------------------------
 
+# a mesh point counts as UNDER a patch point if p - q leans at most this much
+# (sideways / length, 0.5 = 30 deg) off its face normal: the nearest point of a
+# hole's rim or of the end of the scan/mesh is BESIDE, never used
+UNDER_SLOPE = 0.5
+
+
 class ScanMixin(object):
     def prep_front(self):
         """Thin parts are often scanned on both sides. Every clicked point hit a
@@ -39,6 +45,7 @@ class ScanMixin(object):
         self.ray_back = min(0.25 * span + mm, max(1.5 * width, 3.0 * mm))
         self.n_back = 0
         self.n_wall = 0
+        self.n_side = 0
 
     def scan_side_sign(self, ns):
         """+1 if the surface normal points to the side of the mesh we work on
@@ -116,14 +123,51 @@ class ScanMixin(object):
         n = self.mesh.FaceNormals[mp.FaceIndex]
         return n.X * nref[0] + n.Y * nref[1] + n.Z * nref[2]
 
+    def under(self, p, mp):
+        """Is mesh point mp UNDER p - straight along its face's normal? The
+        nearest point of a hole's rim or of the end of the scan/mesh lies
+        BESIDE p (p - q runs across the face): the patch must not be pulled
+        sideways there. True also when p is (nearly) on the mesh."""
+        q = mp.Point
+        d = (p.X - q.X, p.Y - q.Y, p.Z - q.Z)
+        L = v_len(d)
+        if L <= 1e-6 * max(self.size, 1.0):
+            return True
+        n = self.mesh.FaceNormals[mp.FaceIndex]
+        nf = v_unit((n.X, n.Y, n.Z))
+        a = v_dot(d, nf)
+        lat = v_len(v_sub(d, v_mul(nf, a)))
+        return lat <= UNDER_SLOPE * L
+
+    def along_normal(self, p, nref, min_dot, reach=None):
+        """The mesh along the normal through p only (from above p down): the
+        first face turned like nref; within reach of p if given."""
+        r = self.ray_back
+        o = rg.Point3d(p.X + nref[0] * r, p.Y + nref[1] * r, p.Z + nref[2] * r)
+        ray = rg.Ray3d(o, rg.Vector3d(-nref[0], -nref[1], -nref[2]))
+        t = rg.Intersect.Intersection.MeshRay(self.mesh, ray)
+        if t is None or t < 0:
+            return None
+        hit = ray.PointAt(t)
+        if reach is not None and hit.DistanceTo(p) > reach:
+            return None
+        mh = self.mesh.ClosestMeshPoint(hit, 0.0)
+        if mh is None or self.face_dot(mh, nref) < min_dot:
+            return None
+        return hit
+
     def scan_pt(self, p, nsurf=None, fit=False):
-        """Mesh point for p, ONLY from faces turned the same way as the patch.
+        """Mesh point for p, ONLY from faces turned the same way as the patch
+        and ONLY along the normal (the ONE way every build, PullN, deviation
+        and start surface finds the scan/mesh - see DEVNOTES.md).
         nsurf : local patch normal (fit and start surface); otherwise the
                 normal of the nearest clicked point is used.
-        fit   : during the fit nothing else is tried - an angled or opposite
-                face (rib, neighbouring wall, back side) just drops the sample.
-        Otherwise (projecting sides / start) a ray along the normal is tried,
-        and its hit is accepted only if THAT face is turned the right way."""
+        fit   : during the fit an angled or opposite face (rib, neighbouring
+                wall, back side) just drops the sample.
+        The nearest point is taken only if it is UNDER p (under); beside p
+        (the rim of a hole, the end of the scan/mesh) only a ray along the
+        normal may find the scan/mesh, within ray_back during the fit -
+        otherwise nothing: the patch is never pulled sideways."""
         m = self.mesh
         mp = m.ClosestMeshPoint(p, 0.0)
         nref = self.ref_normal(p)
@@ -140,30 +184,26 @@ class ScanMixin(object):
         if mp is not None:
             dn = self.face_dot(mp, nref)
             if dn >= min_dot:
-                return mp.Point
-            if dn > -0.3:
+                if self.under(p, mp):
+                    return mp.Point
+                self.n_side = getattr(self, "n_side", 0) + 1      # beside: along the normal only (below)
+            elif dn > -0.3:
                 self.n_wall += 1
                 return None                               # wall / rib (angled face): skip
-            # nearest face is turned AWAY = back side of a thin part: the point
-            # is inside the wall or already through it. The visible side is
-            # forward along the normal - walk there past the back faces.
-            hit = self.front_along(p, nref, min_dot, self.ray_back)
-            if hit is not None:
-                self.n_back += 1
-                return hit
-            if fit:
-                self.n_wall += 1
-                return None
-        r = self.ray_back                                 # back side of a thin part
-        o = rg.Point3d(p.X + nref[0] * r, p.Y + nref[1] * r, p.Z + nref[2] * r)
-        ray = rg.Ray3d(o, rg.Vector3d(-nref[0], -nref[1], -nref[2]))
-        t = rg.Intersect.Intersection.MeshRay(m, ray)
-        if t >= 0:
-            hit = ray.PointAt(t)
-            mh = m.ClosestMeshPoint(hit, 0.0)
-            if mh is not None and self.face_dot(mh, nref) >= min_dot:
-                self.n_back += 1
-                return hit
-        return None
+            else:
+                # nearest face is turned AWAY = back side of a thin part: the point
+                # is inside the wall or already through it. The visible side is
+                # forward along the normal - walk there past the back faces.
+                hit = self.front_along(p, nref, min_dot, self.ray_back)
+                if hit is not None:
+                    self.n_back += 1
+                    return hit
+                if fit:
+                    self.n_wall += 1
+                    return None
+        hit = self.along_normal(p, nref, min_dot, self.ray_back if fit else None)
+        if hit is not None:
+            self.n_back += 1
+        return hit
 
 

@@ -140,12 +140,20 @@ class ViewMixin(object):
                 return key
         return None
 
+    def mesh_under(self, vp, P, p2=None):
+        """The scan/mesh point under the cursor (None = not on it): the same
+        ray as every click (cursor_ray + mesh_ray_point)."""
+        return mesh_ray_point(self.mesh, cursor_ray(vp, P, p2))
+
+    def mesh_at_click(self, gp):
+        return mesh_ray_point(self.mesh, click_ray(gp))
+
     def on_move_view(self, sender, e):
         """Mouse position + hover of the view buttons."""
         try:
             self.last_mouse = (e.Viewport, e.WindowPoint.X, e.WindowPoint.Y)
             hot = self.view_button_at(e.Viewport, e.WindowPoint.X, e.WindowPoint.Y)
-            self.cur_pt = None if hot else e.Point          # constrained to the scan by Rhino (fast)
+            self.cur_pt = None if hot else self.mesh_under(e.Viewport, e.Point, e.WindowPoint)
         except Exception:
             hot = None; self.cur_pt = None
         if hot != self.view_hot:

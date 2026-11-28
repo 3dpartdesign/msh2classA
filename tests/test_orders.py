@@ -211,8 +211,8 @@ class Runner(object):
         rng = np.random.RandomState(len(results))
         b.run("scan_align", T.align_pairs(f, mv, pts, noise=12.0, rng=rng) + [("enter",)])
         stays = sorted(m.cls(f) - br)
-        b.run("scan_autoalign", [("multi", [mv]), ("multi", stays), ("opt", "AutoFitRadius", 150.0 * b.k),
-                                 ("opt", "Fit"), ("opt", "Fit"), ("enter",)])
+        b.run("scan_autoalign", [("multi", [mv]), ("multi", stays), ("opt", "SphereRadius", 150.0 * b.k),
+                                 ("opt", "FitInSpheres"), ("opt", "FitInSpheres"), ("enter",)])
         self.moved_onto(br, f)
 
     def center(self, p):

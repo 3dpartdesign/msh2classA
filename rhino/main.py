@@ -26,6 +26,9 @@ def main():
         try:
             v0 = mesh.Vertices[0]
             mesh.ClosestPoint(rg.Point3d(v0.X, v0.Y, v0.Z))     # builds search tree once
+            bb_ = mesh.GetBoundingBox(True)                      # ... and the one for the cursor ray
+            Rhino.Geometry.Intersect.Intersection.MeshRay(mesh, rg.Ray3d(bb_.Max + (bb_.Max - bb_.Min),
+                                                                          bb_.Min - bb_.Max))
         except Exception:
             pass
         try:      # first call of the big helpers is slow (compiling) - do it now, not at the first click
@@ -55,6 +58,7 @@ def main():
         print("*  click the corners on the scan/mesh - right click = end a side")
         print("*  (scan/mesh tools: the panel buttons; Help = every option)")
         print("*" * 64)
+        session.surface_report()
         tool = None
         try:
             while True:

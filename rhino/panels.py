@@ -52,7 +52,7 @@ def run_scan_tool(nm, note=""):
 
 
 SURFACE_TOOLS = (("Fillet", "Fillet"), ("NPatch", "NPatch"), ("GlobalMatch", "GlobalMatch"),
-                 ("ForceMirror", "ForceMirror"))
+                 ("RebuildAll", "RebuildAll"), ("ForceMirror", "ForceMirror"))
 
 
 def post_surface_tool(name):

@@ -21,6 +21,15 @@ class DrawMixin(object):
             except Exception:
                 self.fillet_mode["hot"] = None
             return
+        if getattr(self, "match_mode", None):
+            # MatchUVN: only its bubbles - no edge / corner hover (no patch is drawn now; its 'Edge' label
+            # lay on the seam bubble and took the mouse from it)
+            self.hover = None; self.hover_bubble = None; self.hover_srf = None; self.hint = None
+            try:
+                self.match_mode["hot"] = self._match_under(xf_tuple(e.Viewport), e.WindowPoint.X, e.WindowPoint.Y)
+            except Exception:
+                self.match_mode["hot"] = None
+            return
         try:
             vp = e.Viewport
             m = xf_tuple(vp)
@@ -28,7 +37,7 @@ class DrawMixin(object):
             hs = self.visible_hits(hit_test(self.cands, m, e.WindowPoint.X, e.WindowPoint.Y, pk, sn), vp)
             self.hover = hs[0] if hs else None
             self.hover_bubble = self.bubble_at(m, e.WindowPoint.X, e.WindowPoint.Y)
-            if self.corners and self.s_sidehint():
+            if self.corners and self.side_hint_on():
                 self.update_side_hint(e)
             else:
                 self.hint = None
@@ -315,11 +324,12 @@ class DrawMixin(object):
             self.draw_view_buttons(d, e.Viewport)
             if self.s_labels():
                 vp_ = e.Viewport
+                free = self.label_free(vp_)        # not under a MatchUVN bubble (it says the same, and is clicked)
                 for (p, txt, cc) in self.markers:
-                    if self.visible(p, vp_):
+                    if self.visible(p, vp_) and free(p):
                         d.DrawDot(p, txt, cc, col(0, 0, 0))
                 for c in self.cands:
-                    if c.ncv and self.visible(c.lbl, vp_):
+                    if c.ncv and self.visible(c.lbl, vp_) and free(c.lbl):
                         d.DrawDot(c.lbl, str(c.ncv), C_GRAY, col(255, 255, 255))
             for k in range(n - 1):
                 self.draw_side(d, k, self.corners[k], self.corners[k + 1])
@@ -406,7 +416,10 @@ class DrawMixin(object):
             ("HintTolPct = {:g}".format(self.s_tolpct()), "SideLenHint deviation, % of the size"),
             ("MirrorPlane = {}".format(self.s_mirror()), "symmetry plane; sides within MirrorSnapDist snap onto it"),
             ("CornerFlow = {}".format("Smooth" if self.s_flow() == "Smooth" else "KinkOK"), "at a neighbour's corner: new side may kink / continues its outline"),
-            ("SideLenHint = {}".format("Yes" if self.s_sidehint() else "No"), "green sure / yellow near limit / red end side at dot"),
+            ("SideLenHint = {}".format("Yes" if self.s_sidehint() else "No"),
+             "green sure / yellow near limit / red end side at dot" if self.follows_scan()
+             else "off with FitSrfTo={} (the patch does not follow the scan/mesh)".format(
+                 {"Points": "TempPts"}.get(self.s_fit(), self.s_fit()))),
             ("SnapPctOfView = {:g}%".format(self.s_snap()), "corner catch radius - zoom in to click beside a corner"),
             ("UndoSrfEdit", "undo the last patch-button step"),
             ("PATCH BUTTONS (hover a finished patch, one step per click)", None),
